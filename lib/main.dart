@@ -310,21 +310,6 @@ class _FerryHomeState extends State<FerryHome> {
           onSubmitted: Navigator.of(context).pop,
         ),
         actions: [
-          TextButton(
-            onPressed: () async {
-              final prefs = service.identity.prefs;
-              final trustedKeys = prefs.getKeys()
-                  .where((key) => key.startsWith('trusted.')).toList();
-              for (final key in trustedKeys) {
-                await prefs.remove(key);
-              }
-              await service.connected?.disconnect();
-              if (!context.mounted) return;
-              Navigator.pop(context);
-              _notice('Все доверенные устройства забыты');
-            },
-            child: const Text('Забыть доверенные устройства'),
-          ),
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')),
           FilledButton(
             onPressed: () => Navigator.pop(context, _ip.text.trim()),
