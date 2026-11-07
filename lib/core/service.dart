@@ -8,6 +8,8 @@ import 'package:path/path.dart' as p;
 
 import 'files.dart';
 import 'flow_acknowledgements.dart';
+import 'lan_networks.dart';
+import 'native_lan.dart';
 import 'secure_peer.dart';
 import 'transfer.dart';
 
@@ -28,6 +30,9 @@ class FerryService extends ChangeNotifier {
 
   HttpServer? _http;
   RawDatagramSocket? _udp;
+  bool _networkScanActive = false;
+  DateTime _lastSubnetRefresh = DateTime.fromMillisecondsSinceEpoch(0);
+  List<LocalSubnet> _subnets = [];
   Timer? _beacon;
   SecurePeer? connected;
   IncomingTransfer? _incoming;
@@ -113,13 +118,14 @@ class FerryService extends ChangeNotifier {
 
   Future<void> _refreshAddresses() async {
     try {
-      final interfaces = await NetworkInterface.list(
-        type: InternetAddressType.IPv4,
-        includeLoopback: false,
-      );
-      _ipAddresses = interfaces.expand((i) => i.addresses.map((a) => a.address)).toList();
+      final subnets = await listLocalSubnets();
+      _subnets = subnets;
+      _lastSubnetRefresh = DateTime.now();
+      _ipAddresses = subnets.map((s) => s.address).toList();
       _notify();
-    } catch (_) {}
+    } catch (_) {
+      // Manual IP entry remains available.
+    }
   }
 
   Future<void> _startDiscovery() async {
@@ -139,39 +145,14 @@ class FerryService extends ChangeNotifier {
           final port = current.port;
           final text = utf8.decode(current.data, allowMalformed: true);
           if (text == 'FERRYPANE_DISCOVER_V1') {
-            _announce(sender, port); // compatibility with preview.1
+            _announce(sender, port); // legacy discovery fallback
             continue;
           }
-          try {
-            final data = jsonDecode(text) as Map<String, dynamic>;
-            final type = data['type'];
-            if (type != 'ferrypane_probe' && type != 'ferrypane_peer') continue;
-            final peerId = data['identity'];
-            final peerName = data['name'];
-            if (peerId is! String || peerId.isEmpty ||
-                peerName is! String || peerName.trim().isEmpty ||
-                peerId == publicIdentity) {
-              continue;
-            }
-            nearby[peerId] = NearbyPeer(
-              peerName,
-              sender.address,
-              peerId,
-              DateTime.now(),
-            );
-            _notify();
-            // The probe itself carries the full identity, so the receiver
-            // learns about its sender even if the response is blocked by
-            // one device's firewall or asymmetric Wi-Fi broadcasts.
-            if (type == 'ferrypane_probe') _announce(sender, port);
-          } catch (_) {
-            // Ignore unrelated LAN broadcasts.
-          }
+          _receiveDiscovery(text, sender.address, port);
         }
       });
       _beacon = Timer.periodic(const Duration(seconds: 3), (_) {
         scanNow();
-        _refreshAddresses();
         nearby.removeWhere(
           (key, peer) =>
               !identity.trusts(key) &&
@@ -191,29 +172,98 @@ class FerryService extends ChangeNotifier {
         'port': ferryPort,
       };
 
-  void _announce(InternetAddress to, int port) {
-    _udp?.send(utf8.encode(jsonEncode(_discoveryMessage('ferrypane_peer'))), to, port);
+  void _receiveDiscovery(String payload, String host, int port) {
+    if (!LocalSubnet.isLocal(host)) return;
+    try {
+      final data = jsonDecode(payload) as Map<String, dynamic>;
+      final type = data['type'];
+      if (type != 'ferrypane_probe' && type != 'ferrypane_peer') return;
+      final peerId = data['identity'];
+      final peerName = data['name'];
+      if (peerId is! String || peerId.isEmpty ||
+          peerName is! String || peerName.trim().isEmpty ||
+          peerId == publicIdentity) return;
+      nearby[peerId] = NearbyPeer(
+        peerName, host, peerId, DateTime.now(),
+      );
+      _notify();
+      if (type == 'ferrypane_probe') {
+        _announce(InternetAddress(host), port);
+      }
+    } catch (_) {
+      // Unrelated network traffic is not a valid discovery announcement.
+    }
   }
 
-  /// Both requests and announcements carry our identity. This prevents
-  /// asymmetric discovery on networks filtering unicast replies.
+  void _announce(InternetAddress to, int port) {
+    final data = utf8.encode(jsonEncode(_discoveryMessage('ferrypane_peer')));
+    // Send unicast responses with a source address on the same network
+    // whenever possible, rather than relying on the system default route.
+    final candidates = _subnets.where((s) => s.contains(to.address)).toList();
+    if (candidates.isNotEmpty) {
+      unawaited(_sendBound(candidates.first, to.address, port, data));
+    } else {
+      _udp?.send(data, to, port);
+    }
+  }
+
+  Future<void> _sendBound(
+      LocalSubnet subnet, String destination, int port, List<int> payload) async {
+    RawDatagramSocket? socket;
+    try {
+      socket = await RawDatagramSocket.bind(InternetAddress(subnet.address), 0);
+      socket.broadcastEnabled = true;
+      socket.send(payload, InternetAddress(destination), port);
+    } catch (_) {
+      // The interface may have vanished or may not permit broadcasts.
+    } finally {
+      socket?.close();
+    }
+  }
+
+  Future<void> _scanAllNetworks() async {
+    if (_networkScanActive || _disposed) return;
+    _networkScanActive = true;
+    try {
+      if (DateTime.now().difference(_lastSubnetRefresh).inSeconds > 25) {
+        await _refreshAddresses();
+      }
+      final payload = utf8.encode(jsonEncode(_discoveryMessage('ferrypane_probe')));
+      for (final subnet in _subnets) {
+        // Directed broadcast only within the interface's actual subnet.
+        // When the prefix is unavailable, limited broadcast is still scoped
+        // by binding the socket to the interface's local address.
+        final address = subnet.broadcast ?? '255.255.255.255';
+        await _sendBound(subnet, address, discoveryPort, payload);
+      }
+      // On Android, a VPN can become the default route. The platform helper
+      // sends a UDP probe using Network.bindSocket for each LAN Network, and
+      // receives its replies on that same underlying socket.
+      if (Platform.isAndroid) {
+        final replies = await AndroidLanNetwork.scan(utf8.decode(payload), discoveryPort);
+        for (final reply in replies) {
+          final host = reply['host'];
+          final message = reply['payload'];
+          if (host != null && message != null) {
+            _receiveDiscovery(message, host, discoveryPort);
+          }
+        }
+      }
+    } catch (e) {
+      _status('Поиск в локальных сетях: $e');
+    } finally {
+      _networkScanActive = false;
+      _notify();
+    }
+  }
+
+  /// Search every eligible local IPv4 interface; never probe public networks.
   void scanNow() {
-    final udp = _udp;
-    if (udp == null) {
+    if (_udp == null) {
       _status('Автопоиск недоступен. Подключитесь вручную по IP.');
       return;
     }
-    final destination = InternetAddress('255.255.255.255');
-    udp.send(
-      utf8.encode(jsonEncode(_discoveryMessage('ferrypane_probe'))),
-      destination,
-      discoveryPort,
-    );
-    udp.send(
-      utf8.encode(jsonEncode(_discoveryMessage('ferrypane_peer'))),
-      destination,
-      discoveryPort,
-    );
+    unawaited(_scanAllNetworks());
     _notify();
   }
 
@@ -223,6 +273,10 @@ class FerryService extends ChangeNotifier {
     connectionStatus = 'Connecting to $host';
     _notify();
     final uri = Uri.parse(host.contains('://') ? host : 'ws://$host:$ferryPort');
+    if (Platform.isAndroid) {
+      final routeInfo = await AndroidLanNetwork.routeTo(uri.host);
+      if (routeInfo != null) _status(routeInfo);
+    }
     final socket = await WebSocket.connect(uri.toString())
         .timeout(const Duration(seconds: 10));
     _attach(socket, true, uri.host);

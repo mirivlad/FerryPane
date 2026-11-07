@@ -15,3 +15,8 @@ ios/
 .vscode/
 *.iml
 *.log
+
+# Android release signing: never commit a private keystore or passwords
+**/*.p12
+**/*.jks
+**/key.properties
