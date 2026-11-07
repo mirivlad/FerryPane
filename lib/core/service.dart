@@ -39,6 +39,7 @@ class FerryService extends ChangeNotifier {
 
   String _newTransferId() => '${DateTime.now().microsecondsSinceEpoch}-${++_transferSequence}';
   int _nextId = 0;
+  bool _disposed = false;
   bool _sending = false;
   bool _discardingTransfer = false;
   String exportRoot;
@@ -117,7 +118,7 @@ class FerryService extends ChangeNotifier {
         includeLoopback: false,
       );
       _ipAddresses = interfaces.expand((i) => i.addresses.map((a) => a.address)).toList();
-      notifyListeners();
+      _notify();
     } catch (_) {}
   }
 
@@ -158,7 +159,7 @@ class FerryService extends ChangeNotifier {
               peerId,
               DateTime.now(),
             );
-            notifyListeners();
+            _notify();
             // The probe itself carries the full identity, so the receiver
             // learns about its sender even if the response is blocked by
             // one device's firewall or asymmetric Wi-Fi broadcasts.
@@ -213,14 +214,14 @@ class FerryService extends ChangeNotifier {
       destination,
       discoveryPort,
     );
-    notifyListeners();
+    _notify();
   }
 
   Future<void> connect(String ipOrHost) async {
     final host = ipOrHost.trim();
     if (host.isEmpty) throw const FormatException('Enter device IP address');
     connectionStatus = 'Connecting to $host';
-    notifyListeners();
+    _notify();
     final uri = Uri.parse(host.contains('://') ? host : 'ws://$host:$ferryPort');
     final socket = await WebSocket.connect(uri.toString())
         .timeout(const Duration(seconds: 10));
@@ -277,7 +278,7 @@ class FerryService extends ChangeNotifier {
     );
     connected = peer;
     connectionStatus = 'Pairing…';
-    notifyListeners();
+    _notify();
     unawaited(peer.run());
   }
 
@@ -290,7 +291,7 @@ class FerryService extends ChangeNotifier {
     }
     nearby.clear();
     await connected?.disconnect();
-    notifyListeners();
+    _notify();
   }
 
   Future<void> setExportRoot(String path) async {
@@ -368,7 +369,7 @@ class FerryService extends ChangeNotifier {
       _transferComplete = null;
       _outgoingTransferId = null;
       _sending = false;
-      notifyListeners();
+      _notify();
     }
   }
 
@@ -530,17 +531,22 @@ class FerryService extends ChangeNotifier {
       _transferComplete = null;
       _outgoingTransferId = null;
       _sending = false;
-      notifyListeners();
+      _notify();
     }
+  }
+
+  void _notify() {
+    if (!_disposed) super.notifyListeners();
   }
 
   void _status(String text) {
     lastMessage = text;
-    notifyListeners();
+    _notify();
   }
 
   @override
   void dispose() {
+    _disposed = true;
     _beacon?.cancel();
     _udp?.close();
     _http?.close(force: true);
