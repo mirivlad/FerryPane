@@ -88,8 +88,11 @@ jobs:
         run: |
           APKSIGNER="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner"
           "$APKSIGNER" verify --verbose --print-certs build/app/outputs/flutter-apk/app-release.apk
-          actual="$("$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk | sed -n 's/.*Signer #1 certificate SHA-256 digest: //p' | tr -d ':' | tr '[:lower:]' '[:upper:]')"
-          test "$actual" = "20BD4749485E7C1A5C0EF072077E277FEABD2389E31161B675B4FDDB7407439D"
+          actual="$("$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk | awk -F 'digest: ' '/certificate SHA-256 digest:/ {print $2; exit}' | tr -d ':' | tr '[:lower:]' '[:upper:]')"
+          if [[ "$actual" != "20BD4749485E7C1A5C0EF072077E277FEABD2389E31161B675B4FDDB7407439D" ]]; then
+            echo "::error::APK signer certificate fingerprint does not match FerryPane release identity"
+            exit 1
+          fi
       - name: Package APK
         if: startsWith(github.ref, 'refs/tags/')
         run: cp build/app/outputs/flutter-apk/app-release.apk FerryPane-android.apk
