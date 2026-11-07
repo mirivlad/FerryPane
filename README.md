@@ -1,50 +1,77 @@
 # FerryPane
 
-**FerryPane** is a planned open-source, cross-platform file manager for browsing and transferring files between devices on the same local network.
+**FerryPane** — open-source file manager for direct encrypted file transfers between **Windows, Linux and Android** on one local network, without accounts, cloud or cables.
 
-The first release targets **Windows, Linux, and Android**. Every device is a peer: it can browse remote files, expose explicitly permitted folders, send data, and receive data. There are no permanent "PC client" and "phone server" roles.
+One Flutter/Dart peer application runs on every supported OS. Every installation can send, receive and browse files on another. Desktop displays **two file panels**; phones switch between two panels; tablets display both when the window is wide enough.
 
-## Supported connection pairs (target for the first usable LAN release)
+> **Status:** 0.1.0 preview / first LAN release candidate. Real-device interoperability and security review remain necessary before treating it as a stable security-sensitive product.
 
-- Windows ↔ Windows
-- Windows ↔ Linux
-- Linux ↔ Linux
-- Windows ↔ Android
-- Linux ↔ Android
-- Android ↔ Android
+## What works
 
-Transfers must work without Internet or accounts, including when one Android device provides a Wi-Fi hotspot.
+- Browse folders on the current device and a connected peer.
+- Send or receive files and whole nested folders using the **Copy** arrow buttons.
+- Two Windows PCs, Windows↔Linux, Linux↔Linux, Android↔PC, and Android↔Android use the same application and wire protocol.
+- Automatically discover other devices by LAN UDP broadcast, with manual IP connection as fallback.
+- First-time peer pairing with an identical **6-digit verification code shown on both devices**; approve only if it matches.
+- X25519 key exchange + session-bound ephemeral keys, HKDF-SHA256 and AES-256-GCM encrypted application packets.
+- Stream batches of many tiny files over one persistent WebSocket; 64 KiB frames and bounded flow control. Each file is SHA-256 verified before finalization; interrupted files remain uncommitted.
+- Incoming name conflicts are resolved by adding a numeric suffix (existing files are not overwritten).
+- Export root configurable in the settings; remote peers cannot navigate outside it, and symbolic links are never followed.
+- No Internet required; peer can work over an Android Wi-Fi hotspot.
+- Windows/Linux/Android packages built by GitHub Actions.
 
-## Product principles
+## Basic usage
 
-- **File manager first.** Browse remote directories as naturally as local ones; copy folders recursively without tapping every file.
-- **Native-feeling interfaces.** Two-pane desktop file manager; touch-friendly Android UI with local/remote locations and a two-pane tablet layout.
-- **Same protocol on every platform.** A peer can initiate a transfer or respond to one.
-- **Efficient small-file transfers.** Use a streaming batch format rather than an independent network round-trip for every file.
-- **Secure by default.** Explicit pairing and verification, device identities, encrypted channels, per-peer filesystem permissions, and safe handling of destructive operations.
-- **Reliable transfers.** Progress, cancel, error reporting, resume, and integrity checks.
-- **Local-first.** Discover peers with mDNS where possible, with manual address entry as a fallback.
-- **Future hub is optional.** Any Internet relay/server, business model, and licensing will be decided separately; no cloud dependency is part of the LAN release.
+1. Install/open FerryPane on both devices, connected to the same Wi-Fi, Ethernet LAN or Android hotspot.
+2. On Android, permit **All files access** in Android's settings when prompted. Android's OS restrictions on other apps' private data remain in force.
+3. On each device, review the **shared folder** in Settings. On desktop it defaults to Downloads (or home if unavailable); on Android it defaults to shared internal storage.
+4. On one device, choose the other in the **Wi-Fi discovery** menu or click **Connect by IP**. If auto-discovery is blocked by the network, type the IP shown in Settings on the destination device.
+5. On both devices confirm the **same** six-digit pairing code. Reject if codes differ.
+6. Choose **Local** or **Remote** in either panel. Open a folder by tapping/clicking it, select one or more **files or folders** using the checkboxes, then click the arrow toward the destination panel.
 
-## Proposed stack
+The remote panel shows the root *exported* by the other device, not unrestricted access to its entire filesystem.
 
-| Layer | Technology |
-|---|---|
-| Windows / Linux UI | C# / .NET + Avalonia |
-| Android UI and platform integration | Kotlin + Jetpack Compose |
-| Local transport | TLS-protected binary WebSocket streams |
-| Service discovery | mDNS; manual IP fallback |
-| Protocol | Versioned, language-neutral message and streaming specifications |
+### Platform limitations in the preview
 
-The protocol and security mechanisms are defined independent of platform. Cryptographic primitives will use maintained, audited libraries; no custom cryptography.
+- Android file access is bounded by OS restrictions; **Android/data** and private app data cannot be exposed simply by granting all-files access.
+- On Android, **keep the app in the foreground during transfers** for now. A persistent foreground-service implementation is not included yet.
+- Linux and Windows firewalls may need inbound TCP **47655** and discovery UDP **47656** (local network only).
+- The desktop archives are **portable**, not installers. Windows zip: extract and run `ferrypane.exe`; Linux tar.gz: extract the whole directory and execute `./ferrypane` (GTK runtime libraries required).
+- Android APK is side-loaded; uninstalling/reinstalling without preserving app data resets pairing keys.
+- Only one connected peer and one active transfer per application are supported in 0.1.0.
+- **No hub, synchronization, directory deletion, remote rename or resumable interrupted transfer yet.** Incomplete copies are rejected; retry starts the affected copy anew.
+- Automatic discovery uses **UDP broadcast**, not mDNS yet; use manual IP if blocked.
+- Authentication keys currently live in the application's private preferences; hardware-backed keystore integration is future work.
+- The session security mechanism is new and has not undergone an independent cryptographic audit; do not treat the preview as suitable for hostile networks or high-risk secrets.
 
-## Project status
+## Build from source
 
-Initial architecture and milestones are being documented. **No runnable application has been released yet.**
+Install Flutter stable, a supported platform toolchain, and for Android the Android SDK/JDK 17.
 
-- [Architecture](docs/ARCHITECTURE.md)
-- [Development roadmap](docs/ROADMAP.md)
+```bash
+bash tool/prepare_platforms.sh
+flutter run -d linux      # or: -d windows / <Android device ID>
+flutter build linux --release
+flutter build windows --release
+flutter build apk --release
+```
+
+Platform folders are generated locally by `flutter create`; `tool/patch_android.py` applies Android LAN and storage permission entries. They are intentionally not committed to Git.
+
+GitHub Actions builds Windows, Linux, and APK artifacts on every PR/push. A `v*` tag also publishes a release with the three packages.
+
+## Project layout
+
+- `lib/core/files.dart`: safe file and path handling.
+- `lib/core/secure_peer.dart`: handshake, trust, authenticated encryption.
+- `lib/core/service.dart`: local WebSocket server, discovery, peer operations.
+- `lib/core/transfer.dart`: streamed directory/file transfer and checksums.
+- `lib/main.dart`: adaptive two-pane file manager.
+- `docs/`: architecture and roadmap.
+- `test/`: filesystem path-security tests.
 
 ## Licensing
 
-The end-user applications are intended to be open source. The precise license will be recorded before source-code distribution. A possible future relay service is **out of scope** and is not automatically covered by client-app licensing decisions.
+FerryPane client application is licensed under **GNU GPL version 3 or later**; see [LICENSE](LICENSE). A possible future internet relay/hub is a **separate, undecided project**, and its license/business model is not determined by the client-app license. A public protocol can be implemented by independent software.
+
+Contributions, testing reports and bug fixes are welcome.
