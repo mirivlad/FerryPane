@@ -78,7 +78,7 @@ class FerryService extends ChangeNotifier {
         }
         try {
           final socket = await WebSocketTransformer.upgrade(request);
-          _attach(socket, false);
+          _attach(socket, false, request.connectionInfo?.remoteAddress.address);
         } catch (e) {
           _status('Incoming connection rejected: $e');
         }
@@ -86,6 +86,19 @@ class FerryService extends ChangeNotifier {
       _status('Sharing available on port $ferryPort');
     } catch (e) {
       _status('Could not listen on port $ferryPort: $e');
+    }
+    // Previously paired devices remain selectable when broadcast discovery
+    // is blocked, as can happen on some Windows firewall/Wi-Fi profiles.
+    for (final key in identity.prefs.getKeys()) {
+      if (!key.startsWith('known.host.')) continue;
+      final peerId = key.substring('known.host.'.length);
+      final knownName = identity.prefs.getString('trusted.$peerId');
+      final knownHost = identity.prefs.getString(key);
+      if (knownName != null && knownHost != null && knownHost.isNotEmpty) {
+        nearby[peerId] = NearbyPeer(
+          knownName, knownHost, peerId, DateTime.fromMillisecondsSinceEpoch(0),
+        );
+      }
     }
     await _refreshAddresses();
     await _startDiscovery();
@@ -153,7 +166,9 @@ class FerryService extends ChangeNotifier {
         scanNow();
         _refreshAddresses();
         nearby.removeWhere(
-          (_, peer) => DateTime.now().difference(peer.seen).inSeconds > 45,
+          (key, peer) =>
+              !identity.trusts(key) &&
+              DateTime.now().difference(peer.seen).inSeconds > 45,
         );
       });
       scanNow();
@@ -203,10 +218,10 @@ class FerryService extends ChangeNotifier {
     final uri = Uri.parse(host.contains('://') ? host : 'ws://$host:$ferryPort');
     final socket = await WebSocket.connect(uri.toString())
         .timeout(const Duration(seconds: 10));
-    _attach(socket, true);
+    _attach(socket, true, uri.host);
   }
 
-  void _attach(WebSocket socket, bool initiator) {
+  void _attach(WebSocket socket, bool initiator, String? remoteAddress) {
     socket.pingInterval = const Duration(seconds: 20);
     final old = connected;
     if (old != null) {
@@ -242,6 +257,14 @@ class FerryService extends ChangeNotifier {
       onReady: () {
         if (connected == peer) {
           connectionStatus = 'Connected: ${peer.remoteName}';
+          if (remoteAddress != null && remoteAddress.isNotEmpty) {
+            nearby[peer.remoteKey] = NearbyPeer(
+              peer.remoteName, remoteAddress, peer.remoteKey, DateTime.now(),
+            );
+            unawaited(identity.prefs.setString(
+              'known.host.${peer.remoteKey}', remoteAddress,
+            ));
+          }
           _status('Можно передавать файлы');
         }
       },

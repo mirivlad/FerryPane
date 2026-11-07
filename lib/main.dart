@@ -366,7 +366,10 @@ class _FerryHomeState extends State<FerryHome> {
                   .where((key) => key.startsWith('trusted.')).toList();
               for (final key in trustedKeys) {
                 await prefs.remove(key);
+                await prefs.remove('known.host.${key.substring('trusted.'.length)}');
               }
+              service.nearby.clear();
+              service.notifyListeners();
               await service.connected?.disconnect();
               if (!context.mounted) return;
               Navigator.pop(context);
@@ -645,7 +648,10 @@ class _FerryHomeState extends State<FerryHome> {
                         : _service!.nearby.values
                             .map((peer) => PopupMenuItem<NearbyPeer>(
                                   value: peer,
-                                  child: Text('${peer.name} • ${peer.host}'),
+                                  child: Text(
+                                    '${peer.name} • ${peer.host}'
+                                    '${DateTime.now().difference(peer.seen).inSeconds > 45 ? ' (сохранённый адрес)' : ''}',
+                                  ),
                                 ))
                             .toList(),
                   ),
