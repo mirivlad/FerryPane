@@ -1,4 +1,4 @@
-name: Build FerryPane 0.1.0 preview
+name: Build FerryPane
 on:
   push:
     branches: [main]
@@ -69,11 +69,32 @@ jobs:
           cache: true
       - name: Prepare Flutter platforms
         run: bash tool/prepare_platforms.sh
-      - name: Build APK
+      # A forked PR cannot access secrets. Compile it with debug signing
+      # to verify Kotlin and Dart, but never publish this as an update.
+      - name: Validate Android APK on pull requests
+        if: github.event_name == 'pull_request'
+        run: flutter build apk --debug --target-platform android-arm64
+      - name: Configure permanent Android signing identity
+        if: github.event_name != 'pull_request'
+        env:
+          FERRYPANE_ANDROID_KEYSTORE_B64: ${{ secrets.FERRYPANE_ANDROID_KEYSTORE_B64 }}
+          FERRYPANE_ANDROID_STORE_PASSWORD: ${{ secrets.FERRYPANE_ANDROID_STORE_PASSWORD }}
+        run: bash tool/prepare_signing.sh
+      - name: Build signed release APK
+        if: github.event_name != 'pull_request'
         run: flutter build apk --release --target-platform android-arm,android-arm64,android-x64
+      - name: Verify signed APK
+        if: github.event_name != 'pull_request'
+        run: |
+          APKSIGNER="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner"
+          "$APKSIGNER" verify --verbose --print-certs build/app/outputs/flutter-apk/app-release.apk
+          actual="$("$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk | sed -n 's/.*Signer #1 certificate SHA-256 digest: //p' | tr -d ':' | tr '[:lower:]' '[:upper:]')"
+          test "$actual" = "20BD4749485E7C1A5C0EF072077E277FEABD2389E31161B675B4FDDB7407439D"
       - name: Package APK
+        if: github.event_name != 'pull_request'
         run: cp build/app/outputs/flutter-apk/app-release.apk FerryPane-android.apk
       - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
         with:
           name: FerryPane-android-apk
           path: FerryPane-android.apk
@@ -88,7 +109,7 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          name: FerryPane 0.1.1 Preview
+          name: FerryPane 0.1.2 Preview
           prerelease: true
           generate_release_notes: true
           files: |
