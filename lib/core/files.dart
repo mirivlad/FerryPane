@@ -20,7 +20,7 @@ String sanitizeRelative(String value) {
 String containedPath(String root, String relative) {
   final clean = sanitizeRelative(relative);
   final base = p.normalize(p.absolute(root));
-  final candidate = p.normalize(p.join(base, ...clean.split('/').where((e) => e.isNotEmpty)));
+  final candidate = p.normalize(p.joinAll([base, ...clean.split('/').where((e) => e.isNotEmpty)]));
   if (candidate != base && !p.isWithin(base, candidate)) {
     throw const FormatException('Outside exported root');
   }
