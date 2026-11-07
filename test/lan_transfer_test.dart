@@ -144,7 +144,7 @@ void main() {
         flow.finish();
         expect(a.ready, isTrue,
             reason: 'Sender must remain connected after transfer $attempt');
-        expect(receiver!.ready, isTrue,
+        expect(receiver.ready, isTrue,
             reason: 'Receiver must remain connected after transfer $attempt');
         expect(disconnections, 0);
       }
