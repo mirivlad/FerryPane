@@ -244,7 +244,7 @@ class MainActivity : FlutterActivity() {
         }
     }
 }
-''')
+''', encoding="utf-8")
 print("Patched Android LAN permissions, network selection and model name")
 
 # Flutter create generates release build signing with a random runner debug
