@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:crypto/crypto.dart' as digest;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/services.dart';
 
 typedef PairApproval = Future<bool> Function(String peerName, String code, String identity);
 typedef JsonHandler = Future<void> Function(Map<String, dynamic> command);
@@ -25,8 +26,9 @@ class PeerIdentity {
   final SharedPreferences prefs;
   final SimpleKeyPair keyPair;
   final SimplePublicKey publicKey;
+  final String systemName;
 
-  PeerIdentity._(this.prefs, this.keyPair, this.publicKey);
+  PeerIdentity._(this.prefs, this.keyPair, this.publicKey, this.systemName);
 
   static Future<PeerIdentity> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -36,7 +38,24 @@ class PeerIdentity {
       await prefs.setString('ferrypane.identity.seed', privateSeed);
     }
     final pair = await X25519().newKeyPairFromSeed(fromB64(privateSeed));
-    return PeerIdentity._(prefs, pair, await pair.extractPublicKey());
+    var deviceName = Platform.localHostname;
+    if (Platform.isWindows) {
+      deviceName = Platform.environment['COMPUTERNAME'] ?? deviceName;
+    } else if (Platform.isLinux) {
+      deviceName = Platform.environment['HOSTNAME'] ?? deviceName;
+    } else if (Platform.isAndroid) {
+      try {
+        deviceName = await const MethodChannel('ferrypane/device')
+                .invokeMethod<String>('deviceModel') ??
+            deviceName;
+      } catch (_) {
+        deviceName = 'Android';
+      }
+    }
+    if (deviceName.trim().isEmpty || deviceName.toLowerCase() == 'localhost') {
+      deviceName = Platform.isAndroid ? 'Android' : 'FerryPane PC';
+    }
+    return PeerIdentity._(prefs, pair, await pair.extractPublicKey(), deviceName);
   }
 
   String get publicString => b64(publicKey.bytes);
@@ -51,7 +70,7 @@ class PeerIdentity {
   String get displayName {
     final configured = prefs.getString('ferrypane.device.name');
     if (configured != null && configured.trim().isNotEmpty) return configured;
-    return Platform.localHostname;
+    return systemName;
   }
 
   Future<void> rename(String value) =>
@@ -77,6 +96,7 @@ class SecurePeer {
   Future<void> _sendTail = Future<void>.value();
   final _cipher = AesGcm.with256bits();
   bool ready = false;
+  String? _disconnectReason;
 
   SecurePeer({
     required this.socket,
@@ -96,7 +116,7 @@ class SecurePeer {
       final nonce = randomBytes(16);
       final ownHello = <String, dynamic>{
         'type': 'hello',
-        'version': 1,
+        'version': 2,
         'name': identity.displayName,
         'identity': identity.publicString,
         'ephemeral': b64((await ephemeral.extractPublicKey()).bytes),
@@ -114,8 +134,8 @@ class SecurePeer {
         socket.add(jsonEncode(ownHello));
       }
 
-      if (otherHello['type'] != 'hello' || otherHello['version'] != 1) {
-        throw const FormatException('Incompatible protocol version');
+      if (otherHello['type'] != 'hello' || otherHello['version'] != 2) {
+        throw const FormatException('Несовместимая версия протокола. Обновите FerryPane на обоих устройствах.');
       }
       remoteName = otherHello['name'] as String;
       remoteKey = otherHello['identity'] as String;
@@ -185,11 +205,15 @@ class SecurePeer {
         }
       }
     } catch (e) {
-      onDisconnected('$e');
+      _disconnectReason = '$e';
     } finally {
       ready = false;
-      await iterator.cancel();
-      await socket.close();
+      try {
+        await iterator.cancel();
+      } finally {
+        await socket.close();
+        onDisconnected(_disconnectReason ?? 'Peer closed the connection');
+      }
     }
   }
 

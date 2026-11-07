@@ -325,16 +325,27 @@ class _FerryHomeState extends State<FerryHome> {
     final service = _service;
     if (service == null) return;
     final controller = TextEditingController(text: service.exportRoot);
+    final nameController = TextEditingController(text: service.name);
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Доступ к файлам этого устройства'),
-        content: Column(
+        content: SingleChildScrollView(
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text('Сопряжённые устройства могут просматривать, скачивать и загружать файлы внутри выбранного каталога.'),
             const SizedBox(height: 14),
+            TextField(
+              controller: nameController,
+              maxLength: 64,
+              decoration: const InputDecoration(
+                labelText: 'Имя этого устройства',
+                helperText: 'Будет отображаться в списке устройств',
+              ),
+            ),
+            const SizedBox(height: 8),
             TextField(
               controller: controller,
               decoration: const InputDecoration(
@@ -345,6 +356,7 @@ class _FerryHomeState extends State<FerryHome> {
             const SizedBox(height: 10),
             Text('IP: ${service.ipAddresses.join(', ')}:$ferryPort'),
           ],
+          ),
         ),
         actions: [
           TextButton(
@@ -373,12 +385,15 @@ class _FerryHomeState extends State<FerryHome> {
     if (result != null) {
       try {
         await service.setExportRoot(result);
-        _notice('Каталог для обмена сохранён');
+        await service.identity.rename(nameController.text.trim());
+        service.scanNow();
+        _notice('Имя устройства и общий каталог сохранены');
       } catch (e) {
         _notice('Нельзя открыть каталог: $e');
       }
     }
     controller.dispose();
+    nameController.dispose();
   }
 
   Widget _pane(BrowserPane pane, int index) {
@@ -468,9 +483,21 @@ class _FerryHomeState extends State<FerryHome> {
                         ),
                       )
                     : ListView.builder(
-                        itemCount: pane.entries.length,
+                        itemCount: pane.entries.length + 1,
                         itemBuilder: (context, i) {
-                          final entry = pane.entries[i];
+                          if (i == 0) {
+                            final root = pane.remote
+                                ? pane.location.isEmpty
+                                : p.dirname(pane.location) == pane.location;
+                            return ListTile(
+                              dense: true,
+                              enabled: !root,
+                              leading: const Icon(Icons.folder_open_outlined),
+                              title: const Text('..'),
+                              onTap: root ? null : () => _goUp(pane),
+                            );
+                          }
+                          final entry = pane.entries[i - 1];
                           final selected = pane.selected.contains(entry.path);
                           return ListTile(
                             dense: true,
@@ -595,16 +622,32 @@ class _FerryHomeState extends State<FerryHome> {
               title: const Text('FerryPane'),
               actions: [
                 if (_service != null)
+                  IconButton(
+                    tooltip: 'Повторить поиск устройств',
+                    onPressed: () {
+                      _service!.scanNow();
+                      _notice('Поиск устройств запущен. Если телефон не виден, используйте подключение по IP.');
+                    },
+                    icon: const Icon(Icons.refresh),
+                  ),
+                if (_service != null)
                   PopupMenuButton<NearbyPeer>(
                     tooltip: 'Устройства в сети',
                     icon: const Icon(Icons.wifi_find),
                     onSelected: (peer) => _connect(peer.host),
-                    itemBuilder: (context) => _service!.nearby.values
-                        .map((peer) => PopupMenuItem(
-                              value: peer,
-                              child: Text('${peer.name} • ${peer.host}'),
-                            ))
-                        .toList(),
+                    itemBuilder: (context) => _service!.nearby.isEmpty
+                        ? <PopupMenuEntry<NearbyPeer>>[
+                            const PopupMenuItem(
+                              enabled: false,
+                              child: Text('Устройства не найдены'),
+                            ),
+                          ]
+                        : _service!.nearby.values
+                            .map((peer) => PopupMenuItem<NearbyPeer>(
+                                  value: peer,
+                                  child: Text('${peer.name} • ${peer.host}'),
+                                ))
+                            .toList(),
                   ),
                 IconButton(
                   tooltip: 'Подключиться по IP',

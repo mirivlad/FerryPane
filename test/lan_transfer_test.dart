@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:ferrypane/core/files.dart';
+import 'package:ferrypane/core/flow_acknowledgements.dart';
 import 'package:ferrypane/core/secure_peer.dart';
 import 'package:ferrypane/core/transfer.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,8 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('two fresh peers pair and transfer a directory with small and large files',
-      () async {
+  test('transfer two folder trees over one encrypted connection', () async {
     SharedPreferences.setMockInitialValues({});
     final alice = await PeerIdentity.load();
     SharedPreferences.setMockInitialValues({});
@@ -35,13 +35,16 @@ void main() {
 
     final aReady = Completer<void>();
     final bReady = Completer<void>();
-    final complete = Completer<void>();
     String? codeA;
     String? codeB;
     SecurePeer? sender;
     SecurePeer? receiver;
     IncomingTransfer? incoming;
-    Completer<void>? flowWaiter;
+    final flow = FlowAcknowledgements();
+    Completer<void>? receipt;
+    String? expectedReceipt;
+    var disconnections = 0;
+    var receiverCount = 0;
 
     final http = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     http.listen((request) async {
@@ -57,21 +60,29 @@ void main() {
         },
         onJson: (msg) async {
           if (msg['type'] == 'upload_start') {
-            incoming = IncomingTransfer(destDir.path, (_) {});
+            incoming = IncomingTransfer(
+              destDir.path, (_) {}, msg['transferId'] as String,
+            );
           } else if (const {
             'dir',
             'file_begin',
             'file_end',
             'transfer_end',
           }.contains(msg['type'])) {
-            await incoming!.consume(msg, b);
-            if (msg['type'] == 'transfer_end' && !complete.isCompleted) {
-              complete.complete();
+            final active = incoming!;
+            await active.consume(msg, b);
+            if (msg['type'] == 'transfer_end') {
+              receiverCount++;
+              incoming = null;
+              await b.sendJson({
+                'type': 'transfer_complete',
+                'transferId': active.transferId,
+              });
             }
           }
         },
         onChunk: (Uint8List bytes) async => incoming!.consumeChunk(bytes, b),
-        onDisconnected: (_) {},
+        onDisconnected: (_) => disconnections++,
         onReady: () => bReady.complete(),
       );
       receiver = b;
@@ -91,12 +102,17 @@ void main() {
         },
         onJson: (msg) async {
           if (msg['type'] == 'flow_ack') {
-            final waiter = flowWaiter;
+            flow.accept(
+              msg['transferId'] as String, (msg['chunks'] as num).toInt(),
+            );
+          } else if (msg['type'] == 'transfer_complete' &&
+              msg['transferId'] == expectedReceipt) {
+            final waiter = receipt;
             if (waiter != null && !waiter.isCompleted) waiter.complete();
           }
         },
         onChunk: (_) async {},
-        onDisconnected: (_) {},
+        onDisconnected: (_) => disconnections++,
         onReady: () => aReady.complete(),
       );
       sender = a;
@@ -106,22 +122,34 @@ void main() {
           .timeout(const Duration(seconds: 20));
       expect(codeA, isNotNull);
       expect(codeA, codeB);
-      expect(a.ready, isTrue);
-      expect(receiver!.ready, isTrue);
 
-      await a.sendJson({'type': 'upload_start', 'dest': ''});
-      await streamTransfer(
-        walkLocalSelection([sourceDir.path]),
-        a,
-        (_) {},
-        () async {
-          final waiter = Completer<void>();
-          flowWaiter = waiter;
-          await waiter.future.timeout(const Duration(seconds: 15));
-          flowWaiter = null;
-        },
-      );
-      await complete.future.timeout(const Duration(seconds: 20));
+      for (var attempt = 1; attempt <= 2; attempt++) {
+        final transferId = 'test-transfer-$attempt';
+        expectedReceipt = transferId;
+        receipt = Completer<void>();
+        flow.begin(transferId);
+        await a.sendJson({
+          'type': 'upload_start',
+          'dest': '',
+          'transferId': transferId,
+        });
+        await streamTransfer(
+          walkLocalSelection([sourceDir.path]),
+          a,
+          (_) {},
+          (chunks) => flow.waitFor(transferId, chunks),
+          transferId: transferId,
+        );
+        await receipt!.future.timeout(const Duration(seconds: 20));
+        flow.finish();
+        expect(a.ready, isTrue,
+            reason: 'Sender must remain connected after transfer $attempt');
+        expect(receiver!.ready, isTrue,
+            reason: 'Receiver must remain connected after transfer $attempt');
+        expect(disconnections, 0);
+      }
+
+      expect(receiverCount, 2);
       expect(
         await File('${destDir.path}/album/hello.txt').readAsString(),
         'Привет, FerryPane!',
@@ -134,13 +162,11 @@ void main() {
         await File('${destDir.path}/album/nested/empty.txt').length(),
         0,
       );
-      for (var i = 0; i < 30; i++) {
-        expect(
-          await File('${destDir.path}/album/nested/small-$i.txt')
-              .readAsString(),
-          'file:$i',
-        );
-      }
+      expect(
+        await File('${destDir.path}/album (1)/nested/large.bin').readAsBytes(),
+        payload,
+        reason: 'Existing destination must be preserved and name-conflicted',
+      );
     } finally {
       await sender?.disconnect();
       await receiver?.disconnect();
