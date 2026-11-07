@@ -5,7 +5,7 @@ Status: proposed execution plan. The **first usable release** means that all LAN
 ## Milestone 0 — foundation
 
 - Create open-source licensing decision for *client applications* and a separate statement that a hypothetical relay is out of scope.
-- Set up repository structure, .NET desktop solution, Kotlin Android application, unit-test projects, and GitHub Actions for Linux/Windows build checks and Android APK build.
+- Set up the Flutter/Dart codebase, platform toolchains, unit-test projects, and GitHub Actions for Linux/Windows and Android APK builds.
 - Define protocol v1 frames, version/capability negotiation, schema and cross-language test vectors.
 - Define identity, mutual verification, pairing/revocation, exported-root permissions, and reliable error handling.
 - Implement a headless protocol/transfer test harness before polishing UIs.
@@ -14,19 +14,19 @@ Status: proposed execution plan. The **first usable release** means that all LAN
 
 ## Milestone 1 — desktop ↔ desktop vertical slice
 
-- Shared .NET peer engine, local-filesystem adapter, LAN listener and connector.
+- Shared Flutter/Dart peer engine, local-filesystem adapter, LAN listener and connector.
 - mDNS announcement/discovery + manual IP fallback.
 - Pair two peers and connect with authenticated, encrypted sessions.
 - Implement root listing, directory listing and stat.
 - Implement one-file download/upload, then recursive directory transfers using a streaming batch.
 - Show queue, progress, cancel, conflicts, and per-file failures.
-- Minimal Avalonia two-pane UI; either pane can point to local or remote storage.
+- Flutter desktop two-pane UI; either pane can point to local or remote storage.
 
 **Acceptance:** Win↔Win, Linux↔Linux, Win↔Linux work locally for files and nested trees; no cloud required.
 
 ## Milestone 2 — desktop ↔ Android
 
-- Android Kotlin peer core and direct LAN networking interoperable with the .NET protocol.
+- Android Flutter peer core using the same protocol implementation as desktop.
 - Android storage adapter supporting only user/OS-authorized files and directories.
 - Permission-onboarding and service lifecycle for active transfers.
 - First Android UI: available devices, pair/revoke, local files and exported roots, connection/transfer status.

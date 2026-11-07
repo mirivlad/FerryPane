@@ -19,7 +19,7 @@ The peer role is **per operation**. For example, a phone can browse a desktop an
 ```text
     Windows peer                 Linux peer                 Android peer
   +----------------+          +----------------+         +------------------+
-  | Avalonia UI    |          | Avalonia UI    |         | Compose UI       |
+  | Flutter UI     |          | Flutter UI     |         | Flutter UI       |
   | Desktop FS     |          | Desktop FS     |         | Android FS       |
   | adapter        |          | adapter        |         | adapter          |
   +-------+--------+          +-------+--------+         +---------+--------+
@@ -29,20 +29,20 @@ The peer role is **per operation**. For example, a phone can browse a desktop an
 ```
 
 Initial implementation stacks:
-- Desktop: .NET and Avalonia, sharing the same desktop peer service and local filesystem adapter.
-- Android: Kotlin and Jetpack Compose, using the same versioned wire format but an Android-specific storage adapter and service lifecycle.
-- Platform-independent protocol specification + cross-language conformance fixtures and integration tests.
+- All platforms: Flutter/Dart, using a shared protocol implementation and platform-adapted filesystem access and UI.
+- Android: Flutter UI with Android storage permissions; later add a native foreground service for background transfers.
+- One shared wire implementation for all platforms, plus cross-platform integration tests.
 
 The desktop can show any pair of sources in its two panes, not only local-versus-phone. Android shows local and connected devices in a location selector; on phones it uses a single pane and explicit target selection, while tablets can use two panes.
 
 ## 3. Connection and identity
 
 - Direct LAN connections only in the initial release.
-- mDNS advertises discoverability and a local endpoint. Manual IP/hostname entry is essential for multicast-blocked Wi-Fi networks and hotspots.
+- UDP LAN broadcast advertises discoverability and a local endpoint (mDNS may be added later). Manual IP/hostname entry is essential for multicast-blocked Wi-Fi networks and hotspots.
 - Devices possess persistent identity keypairs.
 - First pairing requires an interactive confirmation with a QR code or comparison code that authentically binds the peer identity keys. The peer identity is pinned for subsequent sessions.
 - Use maintained libraries and well-reviewed cryptographic handshakes; do not invent cipher suites or homemade key exchange.
-- Transport: WSS/binary WebSockets with TLS for the direct connection; the internal application session is authenticated and end-to-end encrypted so a future *optional* byte-forwarding relay will not need plaintext access.
+- Transport: WebSockets with X25519 mutual-authentication pairing and AES-256-GCM for application frames; the session is end-to-end encrypted so a future *optional* byte-forwarding relay will not need plaintext access.
 - Protocol versioning and feature negotiation are mandatory before file operations.
 
 The future hub is expressly **not** part of this milestone: no NAT traversal, account system, service dependency, or commercial-license assumption. In a later relay mode, both peers may make outgoing HTTPS/WSS connections to port 443; the hub can forward opaque encrypted frames. The application/session identity must remain independently verified so a compromised hub cannot silently substitute a peer key.
@@ -104,10 +104,9 @@ The boundary between UI, device file operations, encrypted message protocol, and
 
 ```text
 /
-  desktop/             # Avalonia UI + .NET peer and desktop FS adapter
-  android/             # Kotlin/Compose app, Android FS adapter + service
-  protocol/            # Wire-format specification and conformance fixtures
-  tests/               # Protocol, transfer, security and end-to-end tests
+  lib/                 # Shared Flutter UI, peer, protocol, filesystem and transfers
+  tool/                # Platform generation and manifest permissions
+  test/                # Protocol, transfer, security and end-to-end tests
   docs/
     ARCHITECTURE.md
     ROADMAP.md
