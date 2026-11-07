@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
 import 'files.dart';
+import 'flow_acknowledgements.dart';
 import 'secure_peer.dart';
 import 'transfer.dart';
 
@@ -31,16 +32,29 @@ class FerryService extends ChangeNotifier {
   SecurePeer? connected;
   IncomingTransfer? _incoming;
   Completer<List<FileEntry>>? _listRequest;
-  Completer<void>? _flowAck;
+  final FlowAcknowledgements _flowAcks = FlowAcknowledgements();
+  Completer<void>? _transferComplete;
+  String? _outgoingTransferId;
+  int _transferSequence = 0;
+
+  String _newTransferId() => '${DateTime.now().microsecondsSinceEpoch}-${++_transferSequence}';
   int _nextId = 0;
+  bool _disposed = false;
   bool _sending = false;
+  bool _discardingTransfer = false;
   String exportRoot;
   String lastMessage = 'Ready';
   String connectionStatus = 'Not connected';
   bool broadcasting = false;
   final Map<String, NearbyPeer> nearby = {};
 
-  FerryService(this.identity, this.onPairing, this.exportRoot);
+  final int listenPort;
+  final bool enableDiscovery;
+  FerryService(this.identity, this.onPairing, this.exportRoot, {
+    this.listenPort = ferryPort,
+    this.enableDiscovery = true,
+  });
+  int? get boundPort => _http?.port;
 
   static Future<FerryService> initialize(
     Future<bool> Function(String, String, String) approval,
@@ -61,7 +75,7 @@ class FerryService extends ChangeNotifier {
 
   Future<void> start() async {
     try {
-      _http = await HttpServer.bind(InternetAddress.anyIPv4, ferryPort, shared: true);
+      _http = await HttpServer.bind(InternetAddress.anyIPv4, listenPort, shared: true);
       broadcasting = true;
       _http!.listen((request) async {
         if (!WebSocketTransformer.isUpgradeRequest(request)) {
@@ -71,17 +85,30 @@ class FerryService extends ChangeNotifier {
         }
         try {
           final socket = await WebSocketTransformer.upgrade(request);
-          _attach(socket, false);
+          _attach(socket, false, request.connectionInfo?.remoteAddress.address);
         } catch (e) {
           _status('Incoming connection rejected: $e');
         }
       });
-      _status('Sharing available on port $ferryPort');
+      _status('Sharing available on port ${_http!.port}');
     } catch (e) {
       _status('Could not listen on port $ferryPort: $e');
     }
+    // Previously paired devices remain selectable when broadcast discovery
+    // is blocked, as can happen on some Windows firewall/Wi-Fi profiles.
+    for (final key in identity.prefs.getKeys()) {
+      if (!key.startsWith('known.host.')) continue;
+      final peerId = key.substring('known.host.'.length);
+      final knownName = identity.prefs.getString('trusted.$peerId');
+      final knownHost = identity.prefs.getString(key);
+      if (knownName != null && knownHost != null && knownHost.isNotEmpty) {
+        nearby[peerId] = NearbyPeer(
+          knownName, knownHost, peerId, DateTime.fromMillisecondsSinceEpoch(0),
+        );
+      }
+    }
     await _refreshAddresses();
-    await _startDiscovery();
+    if (enableDiscovery) await _startDiscovery();
   }
 
   Future<void> _refreshAddresses() async {
@@ -91,7 +118,7 @@ class FerryService extends ChangeNotifier {
         includeLoopback: false,
       );
       _ipAddresses = interfaces.expand((i) => i.addresses.map((a) => a.address)).toList();
-      notifyListeners();
+      _notify();
     } catch (_) {}
   }
 
@@ -105,71 +132,104 @@ class FerryService extends ChangeNotifier {
       _udp!.broadcastEnabled = true;
       _udp!.listen((event) {
         if (event != RawSocketEvent.read) return;
-        final packet = _udp!.receive();
-        if (packet == null) return;
-        final text = utf8.decode(packet.data, allowMalformed: true);
-        if (text == 'FERRYPANE_DISCOVER_V1') {
-          _announce(packet.address, packet.port);
-        } else {
+        Datagram? packet;
+        while ((packet = _udp!.receive()) != null) {
+          final current = packet!;
+          final sender = current.address;
+          final port = current.port;
+          final text = utf8.decode(current.data, allowMalformed: true);
+          if (text == 'FERRYPANE_DISCOVER_V1') {
+            _announce(sender, port); // compatibility with preview.1
+            continue;
+          }
           try {
             final data = jsonDecode(text) as Map<String, dynamic>;
-            if (data['type'] != 'ferrypane_peer' ||
-                data['identity'] == identity.publicString) return;
-            nearby[data['identity'] as String] = NearbyPeer(
-              data['name'] as String,
-              packet.address.address,
-              data['identity'] as String,
+            final type = data['type'];
+            if (type != 'ferrypane_probe' && type != 'ferrypane_peer') continue;
+            final peerId = data['identity'];
+            final peerName = data['name'];
+            if (peerId is! String || peerId.isEmpty ||
+                peerName is! String || peerName.trim().isEmpty ||
+                peerId == publicIdentity) {
+              continue;
+            }
+            nearby[peerId] = NearbyPeer(
+              peerName,
+              sender.address,
+              peerId,
               DateTime.now(),
             );
-            notifyListeners();
-          } catch (_) {}
+            _notify();
+            // The probe itself carries the full identity, so the receiver
+            // learns about its sender even if the response is blocked by
+            // one device's firewall or asymmetric Wi-Fi broadcasts.
+            if (type == 'ferrypane_probe') _announce(sender, port);
+          } catch (_) {
+            // Ignore unrelated LAN broadcasts.
+          }
         }
       });
       _beacon = Timer.periodic(const Duration(seconds: 3), (_) {
-        _udp?.send(
-          utf8.encode('FERRYPANE_DISCOVER_V1'),
-          InternetAddress('255.255.255.255'),
-          discoveryPort,
-        );
+        scanNow();
         _refreshAddresses();
         nearby.removeWhere(
-          (_, peer) => DateTime.now().difference(peer.seen).inSeconds > 20,
+          (key, peer) =>
+              !identity.trusts(key) &&
+              DateTime.now().difference(peer.seen).inSeconds > 45,
         );
       });
-      _udp!.send(
-        utf8.encode('FERRYPANE_DISCOVER_V1'),
-        InternetAddress('255.255.255.255'),
-        discoveryPort,
-      );
+      scanNow();
     } catch (e) {
       _status('Auto-discovery unavailable; manual IP still works: $e');
     }
   }
 
-  void _announce(InternetAddress to, int port) {
-    _udp?.send(
-      utf8.encode(jsonEncode({
-        'type': 'ferrypane_peer',
+  Map<String, dynamic> _discoveryMessage(String type) => {
+        'type': type,
         'name': name,
         'identity': publicIdentity,
         'port': ferryPort,
-      })),
-      to,
-      port,
+      };
+
+  void _announce(InternetAddress to, int port) {
+    _udp?.send(utf8.encode(jsonEncode(_discoveryMessage('ferrypane_peer'))), to, port);
+  }
+
+  /// Both requests and announcements carry our identity. This prevents
+  /// asymmetric discovery on networks filtering unicast replies.
+  void scanNow() {
+    final udp = _udp;
+    if (udp == null) {
+      _status('Автопоиск недоступен. Подключитесь вручную по IP.');
+      return;
+    }
+    final destination = InternetAddress('255.255.255.255');
+    udp.send(
+      utf8.encode(jsonEncode(_discoveryMessage('ferrypane_probe'))),
+      destination,
+      discoveryPort,
     );
+    udp.send(
+      utf8.encode(jsonEncode(_discoveryMessage('ferrypane_peer'))),
+      destination,
+      discoveryPort,
+    );
+    _notify();
   }
 
   Future<void> connect(String ipOrHost) async {
     final host = ipOrHost.trim();
     if (host.isEmpty) throw const FormatException('Enter device IP address');
     connectionStatus = 'Connecting to $host';
-    notifyListeners();
+    _notify();
     final uri = Uri.parse(host.contains('://') ? host : 'ws://$host:$ferryPort');
-    final socket = await WebSocket.connect(uri.toString());
-    _attach(socket, true);
+    final socket = await WebSocket.connect(uri.toString())
+        .timeout(const Duration(seconds: 10));
+    _attach(socket, true, uri.host);
   }
 
-  void _attach(WebSocket socket, bool initiator) {
+  void _attach(WebSocket socket, bool initiator, String? remoteAddress) {
+    socket.pingInterval = const Duration(seconds: 20);
     final old = connected;
     if (old != null) {
       old.disconnect();
@@ -186,10 +246,16 @@ class FerryService extends ChangeNotifier {
         if (connected == peer) {
           _incoming?.abort();
           _incoming = null;
+          _discardingTransfer = false;
           _listRequest?.completeError(StateError('Disconnected: $reason'));
           _listRequest = null;
-          _flowAck?.completeError(StateError('Disconnected'));
-          _flowAck = null;
+          _flowAcks.cancel(StateError('Disconnected: $reason'));
+          final completed = _transferComplete;
+          if (completed != null && !completed.isCompleted) {
+            completed.completeError(StateError('Disconnected: $reason'));
+          }
+          _transferComplete = null;
+          _outgoingTransferId = null;
           connected = null;
           connectionStatus = 'Disconnected';
           _status('Disconnected: $reason');
@@ -198,14 +264,34 @@ class FerryService extends ChangeNotifier {
       onReady: () {
         if (connected == peer) {
           connectionStatus = 'Connected: ${peer.remoteName}';
-          _status(connectionStatus);
+          if (remoteAddress != null && remoteAddress.isNotEmpty) {
+            nearby[peer.remoteKey] = NearbyPeer(
+              peer.remoteName, remoteAddress, peer.remoteKey, DateTime.now(),
+            );
+            unawaited(identity.prefs.setString(
+              'known.host.${peer.remoteKey}', remoteAddress,
+            ));
+          }
+          _status('Можно передавать файлы');
         }
       },
     );
     connected = peer;
     connectionStatus = 'Pairing…';
-    notifyListeners();
+    _notify();
     unawaited(peer.run());
+  }
+
+  Future<void> forgetAllTrusted() async {
+    final trustedKeys = identity.prefs.getKeys()
+        .where((key) => key.startsWith('trusted.')).toList();
+    for (final key in trustedKeys) {
+      await identity.prefs.remove(key);
+      await identity.prefs.remove('known.host.${key.substring('trusted.'.length)}');
+    }
+    nearby.clear();
+    await connected?.disconnect();
+    _notify();
   }
 
   Future<void> setExportRoot(String path) async {
@@ -238,36 +324,52 @@ class FerryService extends ChangeNotifier {
     if (peer == null || !peer.ready) throw StateError('No connected device');
     if (_incoming != null || _sending) throw StateError('Another transfer is in progress');
     await Directory(localDirectory).create(recursive: true);
-    _incoming = IncomingTransfer(localDirectory, _status);
-    await peer.sendJson({
-      'type': 'download',
-      'paths': remotePaths.map(sanitizeRelative).toList(),
-    });
-    _status('Downloading ${remotePaths.length} selections');
+    final transferId = _newTransferId();
+    _discardingTransfer = false;
+    _incoming = IncomingTransfer(localDirectory, _status, transferId);
+    try {
+      await peer.sendJson({
+        'type': 'download',
+        'transferId': transferId,
+        'paths': remotePaths.map(sanitizeRelative).toList(),
+      });
+      _status('Downloading ${remotePaths.length} selections');
+    } catch (_) {
+      await _incoming?.abort();
+      _incoming = null;
+      rethrow;
+    }
   }
 
   Future<void> upload(List<String> localPaths, String remoteDirectory) async {
     final peer = connected;
     if (peer == null || !peer.ready) throw StateError('No connected device');
     if (_sending || _incoming != null) throw StateError('Another transfer is in progress');
+    final transferId = _newTransferId();
     _sending = true;
+    _outgoingTransferId = transferId;
+    _transferComplete = Completer<void>();
+    _flowAcks.begin(transferId);
     try {
-    await peer.sendJson({
-      'type': 'upload_start',
-      'dest': sanitizeRelative(remoteDirectory),
-    });
-    _status('Uploading ${localPaths.length} selections');
-    await streamTransfer(walkLocalSelection(localPaths), peer, _status, _waitForFlowAck);
-    } finally { _sending = false; notifyListeners(); }
-  }
-
-  Future<void> _waitForFlowAck() async {
-    final ack = Completer<void>();
-    _flowAck = ack;
-    try {
-      await ack.future.timeout(const Duration(seconds: 45));
+      await peer.sendJson({
+        'type': 'upload_start',
+        'transferId': transferId,
+        'dest': sanitizeRelative(remoteDirectory),
+      });
+      _status('Uploading ${localPaths.length} selections');
+      await streamTransfer(
+        walkLocalSelection(localPaths), peer, _status,
+        (chunks) => _flowAcks.waitFor(transferId, chunks),
+        transferId: transferId,
+      );
+      await _transferComplete!.future.timeout(const Duration(seconds: 45));
+      _status('Загрузка завершена и подтверждена получателем');
     } finally {
-      if (_flowAck == ack) _flowAck = null;
+      _flowAcks.finish();
+      _transferComplete = null;
+      _outgoingTransferId = null;
+      _sending = false;
+      _notify();
     }
   }
 
@@ -298,10 +400,16 @@ class FerryService extends ChangeNotifier {
           }
           break;
         case 'error':
+          final outgoing = _transferComplete;
+          if (outgoing != null && !outgoing.isCompleted) {
+            outgoing.completeError(StateError(msg['message'] as String));
+          }
           if (_incoming != null) {
             await _incoming!.abort();
             _incoming = null;
+            _discardingTransfer = true;
           }
+          _flowAcks.cancel(StateError(msg['message'] as String));
           final request = _listRequest;
           if (request != null && !request.isCompleted) {
             request.completeError(StateError(msg['message'] as String));
@@ -312,67 +420,133 @@ class FerryService extends ChangeNotifier {
         case 'download':
           // Never block the incoming message loop: flow acknowledgements
           // must continue to be processed while a transfer is running.
-          unawaited(_sendExport(peer, List<String>.from(msg['paths'] as List)));
+          unawaited(_sendExport(
+            peer,
+            List<String>.from(msg['paths'] as List),
+            msg['transferId'] as String,
+          ));
           break;
         case 'upload_start':
           if (_incoming != null || _sending) throw StateError('Receiver busy');
           final destination = containedPath(exportRoot, msg['dest'] as String);
           await Directory(destination).create(recursive: true);
-          _incoming = IncomingTransfer(destination, _status);
+          _discardingTransfer = false;
+          _incoming = IncomingTransfer(destination, _status, msg['transferId'] as String);
           _status('Receiving incoming upload');
           break;
         case 'dir':
         case 'file_begin':
         case 'file_end':
         case 'transfer_end':
+          if (_discardingTransfer) {
+            if (msg['type'] == 'transfer_end') _discardingTransfer = false;
+            break;
+          }
           final incoming = _incoming;
           if (incoming == null) throw const FormatException('Unexpected transfer frame');
           await incoming.consume(msg, peer);
-          if (msg['type'] == 'transfer_end') _incoming = null;
+          if (msg['type'] == 'transfer_end') {
+            _incoming = null;
+            await peer.sendJson({
+              'type': 'transfer_complete',
+              'transferId': incoming.transferId,
+            });
+          }
           break;
         case 'flow_ack':
-          final waiter = _flowAck;
-          if (waiter != null && !waiter.isCompleted) waiter.complete();
+          _flowAcks.accept(
+            msg['transferId'] as String,
+            (msg['chunks'] as num).toInt(),
+          );
+          break;
+        case 'transfer_complete':
+          final receipt = _transferComplete;
+          if (msg['transferId'] == _outgoingTransferId &&
+              receipt != null && !receipt.isCompleted) {
+            receipt.complete();
+          }
           break;
         default:
           throw FormatException('Unknown operation ${msg['type']}');
       }
     } catch (e) {
       _status('Transfer error: $e');
-      await peer.sendJson({'type': 'error', 'message': '$e'});
-      await _incoming?.abort();
-      _incoming = null;
+      if (peer.ready) {
+        await peer.sendJson({'type': 'error', 'message': '$e'});
+      }
+      if (_incoming != null) {
+        await _incoming!.abort();
+        _incoming = null;
+        _discardingTransfer = true;
+      }
     }
   }
 
   Future<void> _onChunk(SecurePeer peer, Uint8List bytes) async {
+    if (_discardingTransfer) return;
     final incoming = _incoming;
     if (incoming == null) throw const FormatException('Unexpected data frame');
-    await incoming.consumeChunk(bytes, peer);
+    try {
+      await incoming.consumeChunk(bytes, peer);
+    } catch (e) {
+      _status('File transfer error: $e');
+      await incoming.abort();
+      _incoming = null;
+      _discardingTransfer = true;
+      if (peer.ready) {
+        await peer.sendJson({'type': 'error', 'message': '$e'});
+      }
+    }
   }
 
-  Future<void> _sendExport(SecurePeer peer, List<String> selected) async {
+  Future<void> _sendExport(
+    SecurePeer peer,
+    List<String> selected,
+    String transferId,
+  ) async {
     if (_sending || _incoming != null) {
       await peer.sendJson({'type': 'error', 'message': 'Transfer already active'});
       return;
     }
     _sending = true;
+    _outgoingTransferId = transferId;
+    _transferComplete = Completer<void>();
+    _flowAcks.begin(transferId);
     try {
       _status('Sending ${selected.length} selections');
-      await streamTransfer(walkSelection(exportRoot, selected), peer, _status, _waitForFlowAck);
+      await streamTransfer(
+        walkSelection(exportRoot, selected), peer, _status,
+        (chunks) => _flowAcks.waitFor(transferId, chunks),
+        transferId: transferId,
+      );
+      await _transferComplete!.future.timeout(const Duration(seconds: 45));
+      _status('Передача завершена и подтверждена получателем');
     } catch (e) {
       _status('Send failed: $e');
-      await peer.sendJson({'type': 'error', 'message': '$e'});
-    } finally { _sending = false; notifyListeners(); }
+      if (peer.ready) {
+        await peer.sendJson({'type': 'error', 'message': '$e'});
+      }
+    } finally {
+      _flowAcks.finish();
+      _transferComplete = null;
+      _outgoingTransferId = null;
+      _sending = false;
+      _notify();
+    }
+  }
+
+  void _notify() {
+    if (!_disposed) super.notifyListeners();
   }
 
   void _status(String text) {
     lastMessage = text;
-    notifyListeners();
+    _notify();
   }
 
   @override
   void dispose() {
+    _disposed = true;
     _beacon?.cancel();
     _udp?.close();
     _http?.close(force: true);

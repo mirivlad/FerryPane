@@ -4,18 +4,18 @@
 
 One Flutter/Dart peer application runs on every supported OS. Every installation can send, receive and browse files on another. Desktop displays **two file panels**; phones switch between two panels; tablets display both when the window is wide enough.
 
-> **Status:** 0.1.0 preview / first LAN release candidate. Real-device interoperability and security review remain necessary before treating it as a stable security-sensitive product.
+> **Status:** 0.1.1 preview / LAN bugfix release candidate. Real-device interoperability and security review remain necessary before treating it as a stable security-sensitive product.
 
 ## What works
 
 - Browse folders on the current device and a connected peer.
 - Send or receive files and whole nested folders using the **Copy** arrow buttons.
 - Two Windows PCs, Windows↔Linux, Linux↔Linux, Android↔PC, and Android↔Android use the same application and wire protocol.
-- Automatically discover other devices by LAN UDP broadcast, with manual IP connection as fallback.
+- Automatically discover other devices by symmetric LAN UDP probes and announcements, with manual IP connection as fallback. A refresh button forces a new scan.
 - First-time peer pairing with an identical **6-digit verification code shown on both devices**; approve only if it matches.
 - X25519 key exchange + session-bound ephemeral keys, HKDF-SHA256 and AES-256-GCM encrypted application packets.
 - Stream batches of many tiny files over one persistent WebSocket; 64 KiB frames and bounded flow control. Each file is SHA-256 verified before finalization; interrupted files remain uncommitted.
-- Incoming name conflicts are resolved by adding a numeric suffix (existing files are not overwritten).
+- Incoming name conflicts are resolved by adding a numeric suffix; repeat folder transfers create a separate folder (existing files are not overwritten).
 - Export root configurable in the settings; remote peers cannot navigate outside it, and symbolic links are never followed.
 - No Internet required; peer can work over an Android Wi-Fi hotspot.
 - Windows/Linux/Android packages built by GitHub Actions.
@@ -29,6 +29,8 @@ One Flutter/Dart peer application runs on every supported OS. Every installation
 5. On both devices confirm the **same** six-digit pairing code. Reject if codes differ.
 6. Choose **Local** or **Remote** in either panel. Open a folder by tapping/clicking it, select one or more **files or folders** using the checkboxes, then click the arrow toward the destination panel.
 
+The first entry in every folder is `..` (parent folder), disabled at the root. Device names are detected from Windows/Linux hostnames or Android model and can be edited in sharing settings.
+
 The remote panel shows the root *exported* by the other device, not unrestricted access to its entire filesystem.
 
 ### Platform limitations in the preview
@@ -38,10 +40,11 @@ The remote panel shows the root *exported* by the other device, not unrestricted
 - Linux and Windows firewalls may need inbound TCP **47655** and discovery UDP **47656** (local network only).
 - The desktop archives are **portable**, not installers. Windows zip: extract and run `ferrypane.exe`; Linux tar.gz: extract the whole directory and execute `./ferrypane` (GTK runtime libraries required).
 - Android APK is side-loaded; uninstalling/reinstalling without preserving app data resets pairing keys.
-- Only one connected peer and one active transfer per application are supported in 0.1.0.
+- Only one connected peer and one active transfer per application are supported in this preview.
 - **No hub, synchronization, directory deletion, remote rename or resumable interrupted transfer yet.** Incomplete copies are rejected; retry starts the affected copy anew.
-- Automatic discovery uses **UDP broadcast**, not mDNS yet; use manual IP if blocked.
+- Automatic discovery uses **UDP broadcast**, not mDNS yet; use manual IP if blocked. On Windows, allow inbound TCP **47655** and UDP **47656** for the application on a **Private** network. Your own device is intentionally excluded from its discovery results.
 - Authentication keys currently live in the application's private preferences; hardware-backed keystore integration is future work.
+- All devices must be updated together for protocol v2; preview.1 clients cannot connect to this version.
 - The session security mechanism is new and has not undergone an independent cryptographic audit; do not treat the preview as suitable for hostile networks or high-risk secrets.
 
 ## Build from source

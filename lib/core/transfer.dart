@@ -13,6 +13,7 @@ import 'secure_peer.dart';
 /// Receiver writes into .part files and publishes only after SHA256 verification.
 class IncomingTransfer {
   final String destinationRoot;
+  final String transferId;
   final void Function(String) progress;
 
   RandomAccessFile? _openedFile;
@@ -23,18 +24,41 @@ class IncomingTransfer {
   AccumulatorSink<crypto.Digest>? _digest;
   ByteConversionSink? _hasher;
   int _chunkCounter = 0;
+  final Map<String, String> _directoryAliases = {};
 
-  IncomingTransfer(this.destinationRoot, this.progress);
+  String _destinationPath(String remoteRelative) {
+    final clean = sanitizeRelative(remoteRelative);
+    final components = clean.split('/');
+    if (components.isNotEmpty &&
+        _directoryAliases.containsKey(components.first)) {
+      components[0] = _directoryAliases[components.first]!;
+    }
+    return containedPath(destinationRoot, components.join('/'));
+  }
+
+  IncomingTransfer(this.destinationRoot, this.progress, this.transferId);
 
   Future<void> consume(Map<String, dynamic> msg, SecurePeer peer) async {
+    if (msg['transferId'] != transferId) {
+      throw const FormatException('Wrong transfer ID');
+    }
     switch (msg['type']) {
       case 'dir':
-        final path = containedPath(destinationRoot, msg['path'] as String);
+        final relative = sanitizeRelative(msg['path'] as String);
+        if (!relative.contains('/')) {
+          // A second copy of a whole directory gets its own root,
+          // rather than mixing renamed files into the existing folder.
+          final available = await _unusedName(
+            containedPath(destinationRoot, relative),
+          );
+          _directoryAliases[relative] = p.basename(available);
+        }
+        final path = _destinationPath(relative);
         await Directory(path).create(recursive: true);
         break;
       case 'file_begin':
         if (_openedFile != null) throw const FormatException('Nested file_begin');
-        final path = containedPath(destinationRoot, msg['path'] as String);
+        final path = _destinationPath(msg['path'] as String);
         await Directory(p.dirname(path)).create(recursive: true);
         _finalPath = await _unusedName(path);
         _temporaryPath = '${_finalPath!}.ferrypane-${DateTime.now().microsecondsSinceEpoch}.part';
@@ -77,7 +101,7 @@ class IncomingTransfer {
     _hasher!.add(bytes);
     _chunkCounter++;
     if (_chunkCounter % 8 == 0) {
-      await peer.sendJson({'type': 'flow_ack'});
+      await peer.sendJson({'type': 'flow_ack', 'transferId': transferId, 'chunks': _chunkCounter});
     }
   }
 
@@ -114,18 +138,19 @@ Future<void> streamTransfer(
   Stream<TransferFile> files,
   SecurePeer peer,
   void Function(String) progress,
-  Future<void> Function() awaitFlowAck,
-) async {
+  Future<void> Function(int) awaitFlowAck, {
+  required String transferId,
+}) async {
   var chunks = 0;
   var count = 0;
   await for (final file in files) {
     final relative = sanitizeRelative(file.relative);
     if (file.directory) {
-      await peer.sendJson({'type': 'dir', 'path': relative});
+      await peer.sendJson({'type': 'dir', 'transferId': transferId, 'path': relative});
       continue;
     }
     final length = await File(file.absolute).length();
-    await peer.sendJson({'type': 'file_begin', 'path': relative, 'size': length});
+    await peer.sendJson({'type': 'file_begin', 'transferId': transferId, 'path': relative, 'size': length});
     final output = AccumulatorSink<crypto.Digest>();
     final hasher = crypto.sha256.startChunkedConversion(output);
     await for (final raw in File(file.absolute).openRead()) {
@@ -136,17 +161,18 @@ Future<void> streamTransfer(
         hasher.add(data);
         await peer.sendChunk(data);
         chunks++;
-        if (chunks % 8 == 0) await awaitFlowAck();
+        if (chunks % 8 == 0) await awaitFlowAck(chunks);
       }
     }
     hasher.close();
     await peer.sendJson({
       'type': 'file_end',
+      'transferId': transferId,
       'sha256': output.events.single.toString(),
     });
     count++;
     progress('Sent $count files: ${file.relative}');
   }
-  await peer.sendJson({'type': 'transfer_end'});
+  await peer.sendJson({'type': 'transfer_end', 'transferId': transferId});
   progress('Sent $count files');
 }

@@ -22,3 +22,52 @@ for perm in permissions:
 content = re.sub(r'<application(?![^>]*android:usesCleartextTraffic)', '<application android:usesCleartextTraffic="true"', content, count=1)
 manifest.write_text(content)
 print("Patched Android manifest:", manifest)
+
+# The Flutter-generated MainActivity is minimal; add access to the Android model
+# and a Wi-Fi multicast lock while the app is running for LAN discovery.
+main_activity = root / "android/app/src/main/kotlin/top/mirv/ferrypane/MainActivity.kt"
+main_activity.parent.mkdir(parents=True, exist_ok=True)
+main_activity.write_text("""package top.mirv.ferrypane
+
+import android.content.Context
+import android.net.wifi.WifiManager
+import android.os.Build
+import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
+
+class MainActivity: FlutterActivity() {
+    private var multicastLock: WifiManager.MulticastLock? = null
+
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "ferrypane/device")
+            .setMethodCallHandler { call, result ->
+                if (call.method == "deviceModel") {
+                    val manufacturer = Build.MANUFACTURER.replaceFirstChar { it.uppercase() }
+                    val model = Build.MODEL
+                    result.success(if (model.startsWith(manufacturer, true)) model else "$manufacturer $model")
+                } else {
+                    result.notImplemented()
+                }
+            }
+        try {
+            val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            multicastLock = wifi.createMulticastLock("FerryPane LAN discovery")
+            multicastLock?.setReferenceCounted(false)
+            multicastLock?.acquire()
+        } catch (_: Exception) {
+            // Manual IP entry remains available.
+        }
+    }
+
+    override fun onDestroy() {
+        try {
+            if (multicastLock?.isHeld == true) multicastLock?.release()
+        } finally {
+            super.onDestroy()
+        }
+    }
+}
+""")
+print("Patched Android device name and Wi-Fi multicast discovery")
