@@ -41,8 +41,8 @@ cat /home/mirivlad/.local/share/ferrypane/signing/store-password
 
 The `tool/prepare_signing.sh` build step decodes the secret in the ephemeral runner and verifies the certificate fingerprint **before** building. After signing, CI verifies the APK's signature with `apksigner` and the same pinned fingerprint.
 
-- Pull requests build a **debug APK for compile verification only**. They do not publish an installable release APK.
-- Main/tag builds require the signing secrets and fail closed when they are absent.
+- Pull requests and untagged main builds compile a **debug APK for verification only**. They do not publish an installable release APK.
+- Version-tagged release builds require the signing secrets and fail closed when they are absent.
 - GitHub Releases only publishes the signed APK if all the platform jobs succeeded.
 
 ### First migration from old previews
