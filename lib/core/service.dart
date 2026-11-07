@@ -281,6 +281,18 @@ class FerryService extends ChangeNotifier {
     unawaited(peer.run());
   }
 
+  Future<void> forgetAllTrusted() async {
+    final trustedKeys = identity.prefs.getKeys()
+        .where((key) => key.startsWith('trusted.')).toList();
+    for (final key in trustedKeys) {
+      await identity.prefs.remove(key);
+      await identity.prefs.remove('known.host.${key.substring('trusted.'.length)}');
+    }
+    nearby.clear();
+    await connected?.disconnect();
+    notifyListeners();
+  }
+
   Future<void> setExportRoot(String path) async {
     final directory = Directory(path);
     if (!await directory.exists()) {

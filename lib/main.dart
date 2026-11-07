@@ -361,16 +361,7 @@ class _FerryHomeState extends State<FerryHome> {
         actions: [
           TextButton(
             onPressed: () async {
-              final prefs = service.identity.prefs;
-              final trustedKeys = prefs.getKeys()
-                  .where((key) => key.startsWith('trusted.')).toList();
-              for (final key in trustedKeys) {
-                await prefs.remove(key);
-                await prefs.remove('known.host.${key.substring('trusted.'.length)}');
-              }
-              service.nearby.clear();
-              service.notifyListeners();
-              await service.connected?.disconnect();
+              await service.forgetAllTrusted();
               if (!context.mounted) return;
               Navigator.pop(context);
               _notice('Все доверенные устройства забыты');
