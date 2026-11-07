@@ -47,7 +47,13 @@ class FerryService extends ChangeNotifier {
   bool broadcasting = false;
   final Map<String, NearbyPeer> nearby = {};
 
-  FerryService(this.identity, this.onPairing, this.exportRoot);
+  final int listenPort;
+  final bool enableDiscovery;
+  FerryService(this.identity, this.onPairing, this.exportRoot, {
+    this.listenPort = ferryPort,
+    this.enableDiscovery = true,
+  });
+  int? get boundPort => _http?.port;
 
   static Future<FerryService> initialize(
     Future<bool> Function(String, String, String) approval,
@@ -68,7 +74,7 @@ class FerryService extends ChangeNotifier {
 
   Future<void> start() async {
     try {
-      _http = await HttpServer.bind(InternetAddress.anyIPv4, ferryPort, shared: true);
+      _http = await HttpServer.bind(InternetAddress.anyIPv4, listenPort, shared: true);
       broadcasting = true;
       _http!.listen((request) async {
         if (!WebSocketTransformer.isUpgradeRequest(request)) {
@@ -83,7 +89,7 @@ class FerryService extends ChangeNotifier {
           _status('Incoming connection rejected: $e');
         }
       });
-      _status('Sharing available on port $ferryPort');
+      _status('Sharing available on port ${_http!.port}');
     } catch (e) {
       _status('Could not listen on port $ferryPort: $e');
     }
@@ -101,7 +107,7 @@ class FerryService extends ChangeNotifier {
       }
     }
     await _refreshAddresses();
-    await _startDiscovery();
+    if (enableDiscovery) await _startDiscovery();
   }
 
   Future<void> _refreshAddresses() async {
