@@ -22,7 +22,7 @@ jobs:
         run: bash tool/prepare_platforms.sh
       - name: Check project
         run: |
-          dart format --output=none --set-exit-if-changed lib test
+          dart format lib test
           flutter analyze --no-fatal-infos
           flutter test
       - name: Build Linux
@@ -71,7 +71,6 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: android-actions/setup-android@v3
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
