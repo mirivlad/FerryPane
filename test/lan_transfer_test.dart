@@ -140,7 +140,7 @@ void main() {
           (chunks) => flow.waitFor(transferId, chunks),
           transferId: transferId,
         );
-        await receipt!.future.timeout(const Duration(seconds: 20));
+        await receipt.future.timeout(const Duration(seconds: 20));
         flow.finish();
         expect(a.ready, isTrue,
             reason: 'Sender must remain connected after transfer $attempt');

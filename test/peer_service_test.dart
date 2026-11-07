@@ -33,9 +33,9 @@ void main() {
     final bFile = File('${bRoot.path}/b.txt');
     await bFile.writeAsString('From B');
 
-    final a = FerryService(aIdentity, (_, _, _) async => true, aRoot.path,
+    final a = FerryService(aIdentity, (name, code, key) async => true, aRoot.path,
         listenPort: 0, enableDiscovery: false);
-    final b = FerryService(bIdentity, (_, _, _) async => true, bRoot.path,
+    final b = FerryService(bIdentity, (name, code, key) async => true, bRoot.path,
         listenPort: 0, enableDiscovery: false);
     try {
       await a.start();
