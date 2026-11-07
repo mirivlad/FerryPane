@@ -35,10 +35,6 @@ jobs:
         with:
           name: FerryPane-linux-x64
           path: FerryPane-linux-x64.tar.gz
-      - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: FerryPane-linux-x64.tar.gz
   windows:
     runs-on: windows-2022
     steps:
@@ -59,10 +55,6 @@ jobs:
         with:
           name: FerryPane-windows-x64
           path: FerryPane-windows-x64.zip
-      - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: FerryPane-windows-x64.zip
   android:
     runs-on: ubuntu-24.04
     steps:
@@ -85,7 +77,21 @@ jobs:
         with:
           name: FerryPane-android-apk
           path: FerryPane-android.apk
-      - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [linux, windows, android]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
         with:
-          files: FerryPane-android.apk
+          pattern: FerryPane-*
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: FerryPane 0.1.0 Preview
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            FerryPane-linux-x64.tar.gz
+            FerryPane-windows-x64.zip
+            FerryPane-android.apk
