@@ -33,6 +33,7 @@ class FerryService extends ChangeNotifier {
   Completer<List<FileEntry>>? _listRequest;
   Completer<void>? _flowAck;
   int _nextId = 0;
+  bool _sending = false;
   String exportRoot;
   String lastMessage = 'Ready';
   String connectionStatus = 'Not connected';
@@ -235,7 +236,7 @@ class FerryService extends ChangeNotifier {
   Future<void> download(List<String> remotePaths, String localDirectory) async {
     final peer = connected;
     if (peer == null || !peer.ready) throw StateError('No connected device');
-    if (_incoming != null) throw StateError('Another transfer is being received');
+    if (_incoming != null || _sending) throw StateError('Another transfer is in progress');
     await Directory(localDirectory).create(recursive: true);
     _incoming = IncomingTransfer(localDirectory, _status);
     await peer.sendJson({
@@ -248,12 +249,16 @@ class FerryService extends ChangeNotifier {
   Future<void> upload(List<String> localPaths, String remoteDirectory) async {
     final peer = connected;
     if (peer == null || !peer.ready) throw StateError('No connected device');
+    if (_sending || _incoming != null) throw StateError('Another transfer is in progress');
+    _sending = true;
+    try {
     await peer.sendJson({
       'type': 'upload_start',
       'dest': sanitizeRelative(remoteDirectory),
     });
     _status('Uploading ${localPaths.length} selections');
     await streamTransfer(walkLocalSelection(localPaths), peer, _status, _waitForFlowAck);
+    } finally { _sending = false; notifyListeners(); }
   }
 
   Future<void> _waitForFlowAck() async {
@@ -293,6 +298,10 @@ class FerryService extends ChangeNotifier {
           }
           break;
         case 'error':
+          if (_incoming != null) {
+            await _incoming!.abort();
+            _incoming = null;
+          }
           final request = _listRequest;
           if (request != null && !request.isCompleted) {
             request.completeError(StateError(msg['message'] as String));
@@ -306,7 +315,7 @@ class FerryService extends ChangeNotifier {
           unawaited(_sendExport(peer, List<String>.from(msg['paths'] as List)));
           break;
         case 'upload_start':
-          if (_incoming != null) throw StateError('Receiver busy');
+          if (_incoming != null || _sending) throw StateError('Receiver busy');
           final destination = containedPath(exportRoot, msg['dest'] as String);
           await Directory(destination).create(recursive: true);
           _incoming = IncomingTransfer(destination, _status);
@@ -343,13 +352,18 @@ class FerryService extends ChangeNotifier {
   }
 
   Future<void> _sendExport(SecurePeer peer, List<String> selected) async {
+    if (_sending || _incoming != null) {
+      await peer.sendJson({'type': 'error', 'message': 'Transfer already active'});
+      return;
+    }
+    _sending = true;
     try {
       _status('Sending ${selected.length} selections');
       await streamTransfer(walkSelection(exportRoot, selected), peer, _status, _waitForFlowAck);
     } catch (e) {
       _status('Send failed: $e');
       await peer.sendJson({'type': 'error', 'message': '$e'});
-    }
+    } finally { _sending = false; notifyListeners(); }
   }
 
   void _status(String text) {
