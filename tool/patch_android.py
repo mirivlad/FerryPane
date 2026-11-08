@@ -301,6 +301,27 @@ shutil.copyfile(
     root / "tool/android/ContactsImporter.kt",
     root / "android/app/src/main/kotlin/top/mirv/ferrypane/ContactsImporter.kt",
 )
+# Use the official Gradle CDN's smaller binary archive, not the generated
+# GitHub-redirecting *all* archive (intermittent HTTP 504 on CI runners).
+wrapper = root / "android/gradle/wrapper/gradle-wrapper.properties"
+if not wrapper.exists():
+    raise RuntimeError("Flutter Gradle wrapper missing")
+wrapper_lines = wrapper.read_text(encoding="utf-8").splitlines()
+found_wrapper = False
+for index, line in enumerate(wrapper_lines):
+    if line.startswith("distributionUrl="):
+        match = re.search(r"gradle-([0-9.]+)-(?:all|bin)\.zip", line)
+        if not match:
+            raise RuntimeError("Unrecognized generated Gradle wrapper URL")
+        wrapper_lines[index] = (
+            "distributionUrl=https\\://downloads.gradle.org/distributions/"
+            + "gradle-" + match.group(1) + "-bin.zip"
+        )
+        found_wrapper = True
+if not found_wrapper:
+    raise RuntimeError("Generated Gradle wrapper has no distributionUrl")
+wrapper.write_text("\n".join(wrapper_lines) + "\n", encoding="utf-8")
+
 print("Patched Android LAN, native contacts/SMS backup, and vCard importer")
 
 # Flutter create generates release build signing with a random runner debug
