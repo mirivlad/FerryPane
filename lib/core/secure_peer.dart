@@ -88,6 +88,7 @@ class SecurePeer {
   final void Function() onReady;
 
   late String remoteName;
+  String remotePlatform = 'unknown';
   late String remoteKey;
   SecretKey? _transmitKey;
   SecretKey? _receiveKey;
@@ -118,6 +119,7 @@ class SecurePeer {
         'type': 'hello',
         'version': 2,
         'name': identity.displayName,
+        'platform': Platform.operatingSystem,
         'identity': identity.publicString,
         'ephemeral': b64((await ephemeral.extractPublicKey()).bytes),
         'nonce': b64(nonce),
@@ -138,6 +140,9 @@ class SecurePeer {
         throw const FormatException('Несовместимая версия протокола. Обновите FerryPane на обоих устройствах.');
       }
       remoteName = otherHello['name'] as String;
+      remotePlatform = otherHello['platform'] is String
+          ? otherHello['platform'] as String
+          : 'unknown';
       remoteKey = otherHello['identity'] as String;
       final remoteIdentity = SimplePublicKey(fromB64(remoteKey), type: KeyPairType.x25519);
       final remoteEphemeral = SimplePublicKey(

@@ -4,12 +4,12 @@
 
 One Flutter/Dart peer application runs on every supported OS. Every installation can send, receive and browse files on another. Desktop displays **two file panels**; phones switch between two panels; tablets display both when the window is wide enough.
 
-> **Status:** 0.1.2 preview / multi-LAN discovery and stable Android signing candidate. Real-device interoperability and security review remain necessary before treating it as a stable security-sensitive product.
+> **Status:** 0.1.3 preview / two-panel improvements and Android personal-data backups. Real-device interoperability and security review remain necessary before treating it as a stable security-sensitive product.
 
 ## What works
 
-- Browse folders on the current device and a connected peer.
-- Send or receive files and whole nested folders using the **Copy** arrow buttons.
+- Browse folders on the current device and a connected peer; choose Windows drive from a disk picker in the local pane.
+- Send or receive files and whole nested folders using two identical directional buttons showing source selection counts. No ambiguous F5 shortcut.
 - Two Windows PCs, Windows↔Linux, Linux↔Linux, Android↔PC, and Android↔Android use the same application and wire protocol.
 - Automatically discover peers using directed UDP broadcasts over all suitable **private IPv4 network interfaces** (Ethernet, Wi-Fi and private VPN interfaces) instead of only the OS default route. Public Internet and mobile-network interfaces are excluded.
 - Android additionally probes each available LAN network via Android's `Network.bindSocket` so a full-tunnel VPN need not silently capture discovery packets **when the VPN allows bypass**. The built-in manual IP option remains available.
@@ -18,9 +18,17 @@ One Flutter/Dart peer application runs on every supported OS. Every installation
 - X25519 key exchange + session-bound ephemeral keys, HKDF-SHA256 and AES-256-GCM encrypted application packets.
 - Stream batches of many tiny files over one persistent WebSocket; 64 KiB frames and bounded flow control. Each file is SHA-256 verified before finalization; interrupted files remain uncommitted.
 - Incoming name conflicts are resolved by adding a numeric suffix; repeat folder transfers create a separate folder (existing files are not overwritten).
-- Export root configurable in the settings; remote peers cannot navigate outside it, and symbolic links are never followed.
+- Export root configurable in the settings; desktop uses a native folder chooser. Remote peers cannot navigate outside it, and symbolic links are never followed.
 - No Internet required; peer can work over an Android Wi-Fi hotspot.
 - Windows/Linux/Android packages built by GitHub Actions.
+
+## Phone contacts and SMS (experimental)
+
+On the desktop, when connected to Android, the toolbar provides “Бэкап контактов”, “Бэкап SMS”, “Восстановить контакты”, and an informational “Восстановить SMS…” action.
+
+Contacts are exported as vCard files, SMS as JSON (not MMS/RCS). Importing contacts uses the stock Android importer with confirmation. SMS restoration is **not implemented** because Android limits writing to the default SMS handler.
+
+For unattended recovery when the display fails, **there are no per-transfer prompts on Android for downloading allowed files**. Sensitive contacts/SMS backups require a separate **one-time opt-in per already-paired desktop key**, along with any necessary Android OS permission. Users enable this while the screen works in Android sharing settings; after that, an authorized PC can download backups without on-phone confirmation as long as FerryPane remains running. Initial pairing still requires code comparison. See [Phone backup guide](docs/PHONE_BACKUP.md).
 
 ## Basic usage
 

@@ -2,10 +2,12 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:path/path.dart' as p;
 import 'package:permission_handler/permission_handler.dart';
 
 import 'core/files.dart';
+import 'core/desktop_locations.dart';
 import 'core/service.dart';
 
 void main() {
@@ -90,6 +92,7 @@ class _FerryHomeState extends State<FerryHome> {
           : _initialLocal;
       final service = await FerryService.initialize(_confirmPairing, root);
       service.addListener(_serviceChanged);
+      service.onContactsImportConsent = _confirmContactsImport;
       if (!mounted) {
         service.dispose();
         return;
@@ -149,7 +152,8 @@ class _FerryHomeState extends State<FerryHome> {
             const SizedBox(height: 8),
             const Text(
               'Подтверждённое устройство сможет читать и записывать файлы '
-              'в общем каталоге этого устройства.',
+              'в общем каталоге этого устройства. '
+              'Доступ к контактам и SMS включается отдельно в настройках Android.',
             ),
             const SizedBox(height: 12),
             Text('Ключ: ${key.substring(0, key.length < 16 ? key.length : 16)}…',
@@ -169,6 +173,59 @@ class _FerryHomeState extends State<FerryHome> {
       ),
     );
     return reply ?? false;
+  }
+
+  Future<bool> _confirmContactsImport(
+      String fileName, String requester) async {
+    if (!mounted) return false;
+    final accepted = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Восстановление контактов'),
+        content: Text(
+          'Устройство $requester передало файл $fileName. '
+          'Открыть стандартный импорт Android? '
+          'Контакты будут добавлены или объединены штатным приложением '
+          'в соответствии с выбранной учётной записью.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Отмена'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Открыть импорт'),
+          ),
+        ],
+      ),
+    );
+    return accepted ?? false;
+  }
+
+  Future<void> _setBackupAccess(
+    FerryService service,
+    String kind,
+    bool allowed,
+    void Function(void Function()) updateDialog,
+  ) async {
+    try {
+      if (allowed) {
+        final permission = kind == 'contacts'
+            ? await Permission.contacts.request()
+            : await Permission.sms.request();
+        if (!permission.isGranted) {
+          _notice('Android не выдал разрешение на чтение '
+              '${kind == 'contacts' ? 'контактов' : 'SMS'}. '
+              'Для SMS действуют особые ограничения Android.');
+          return;
+        }
+      }
+      await service.allowPeerBackup(kind, allowed);
+      if (mounted) updateDialog(() {});
+    } catch (e) {
+      _notice('Не удалось изменить разрешение: $e');
+    }
   }
 
   Future<void> _grantAndroidPermission() async {
@@ -238,6 +295,37 @@ class _FerryHomeState extends State<FerryHome> {
       pane.location = p.dirname(pane.location);
     }
     unawaited(_load(pane));
+  }
+
+  Future<void> _chooseDrive(BrowserPane pane) async {
+    final drives = await listWindowsDrives();
+    if (!mounted) return;
+    if (drives.isEmpty) {
+      _notice('Не удалось получить список дисков Windows');
+      return;
+    }
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const Text('Выбрать диск'),
+        children: drives
+            .map((drive) => SimpleDialogOption(
+                  onPressed: () => Navigator.pop(dialogContext, drive.root),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.storage),
+                      const SizedBox(width: 12),
+                      Flexible(child: Text(drive.label)),
+                    ],
+                  ),
+                ))
+            .toList(),
+      ),
+    );
+    if (choice != null && mounted) {
+      pane.location = choice;
+      await _load(pane);
+    }
   }
 
   Future<void> _copy(BrowserPane from, BrowserPane to) async {
@@ -346,13 +434,68 @@ class _FerryHomeState extends State<FerryHome> {
               ),
             ),
             const SizedBox(height: 8),
-            TextField(
-              controller: controller,
-              decoration: const InputDecoration(
-                labelText: 'Общий каталог',
-                helperText: 'Путь на этом устройстве',
-              ),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: controller,
+                    readOnly: !Platform.isAndroid,
+                    decoration: const InputDecoration(
+                      labelText: 'Общий каталог',
+                      helperText: 'Папка, доступная с других устройств',
+                    ),
+                  ),
+                ),
+                if (!Platform.isAndroid)
+                  IconButton(
+                    tooltip: 'Выбрать папку…',
+                    icon: const Icon(Icons.folder_open_outlined),
+                    onPressed: () async {
+                      try {
+                        final selected = await getDirectoryPath(
+                          initialDirectory: controller.text,
+                        );
+                        if (selected != null) controller.text = selected;
+                      } catch (e) {
+                        if (mounted) _notice('Не удалось выбрать папку: $e');
+                      }
+                    },
+                  ),
+              ],
             ),
+            if (Platform.isAndroid && service.connected?.ready == true) ...[
+              const SizedBox(height: 16),
+              Text('Права доверенного устройства ${service.connected!.remoteName}:',
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+              const Text(
+                'При включении разрешений этот компьютер сможет получать '
+                'резервные копии без подтверждений на телефоне, даже если '
+                'сенсор или дисплей перестанет работать.',
+              ),
+              StatefulBuilder(
+                builder: (context, refresh) => Column(
+                  children: [
+                    SwitchListTile(
+                      dense: true,
+                      title: const Text('Резервное копирование контактов'),
+                      value: service.canPeerBackup('contacts'),
+                      onChanged: (allowed) => _setBackupAccess(
+                        service, 'contacts', allowed, refresh,
+                      ),
+                    ),
+                    SwitchListTile(
+                      dense: true,
+                      title: const Text('Резервное копирование SMS'),
+                      subtitle: const Text('Может требовать отдельного доступа Android'),
+                      value: service.canPeerBackup('sms'),
+                      onChanged: (allowed) => _setBackupAccess(
+                        service, 'sms', allowed, refresh,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 10),
             Text('IP: ${service.ipAddresses.join(', ')}:$ferryPort'),
           ],
@@ -429,6 +572,12 @@ class _FerryHomeState extends State<FerryHome> {
                     ),
                   ),
                 ),
+                if (Platform.isWindows && !pane.remote)
+                  IconButton(
+                    tooltip: 'Выбрать диск',
+                    onPressed: () => _chooseDrive(pane),
+                    icon: const Icon(Icons.storage_outlined),
+                  ),
                 IconButton(
                   tooltip: 'Вверх',
                   onPressed: disabled ? null : () => _goUp(pane),
@@ -537,12 +686,114 @@ class _FerryHomeState extends State<FerryHome> {
     return '${(size / 1073741824).toStringAsFixed(1)} GB';
   }
 
+  BrowserPane? get _localDestination {
+    if (!_left.remote) return _left;
+    if (!_right.remote) return _right;
+    return null;
+  }
+
+  Future<void> _backupPersonal(String kind) async {
+    final service = _service;
+    final target = _localDestination;
+    if (service == null || target == null) {
+      _notice('Выберите локальную папку для сохранения резервной копии.');
+      return;
+    }
+    try {
+      await service.requestPhoneBackup(kind, target.location);
+      _notice('Запрос отправлен. Разрешение должно быть выдано '
+          'доверенному ПК в настройках Android заранее.');
+    } catch (e) {
+      _notice('Резервное копирование: $e');
+    }
+  }
+
+  Future<void> _restoreContacts() async {
+    final service = _service;
+    if (service == null) return;
+    try {
+      final file = await openFile(
+        acceptedTypeGroups: [
+          const XTypeGroup(label: 'Контакты vCard', extensions: ['vcf']),
+        ],
+      );
+      if (file == null) return;
+      await service.sendContactsToPhone(file.path);
+      _notice('Контакты отправлены. На телефоне потребуется '
+          'подтвердить штатный импорт.');
+    } catch (e) {
+      _notice('Восстановление контактов: $e');
+    }
+  }
+
+  Future<void> _smsRestoreInfo() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Восстановление SMS'),
+        content: const Text(
+          'Android разрешает запись в системную базу SMS только '
+          'приложению SMS по умолчанию. FerryPane пока не является '
+          'таким приложением. Восстановление SMS не реализовано, '
+          'чтобы не обещать небезопасную или неработающую операцию.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Понятно'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _phoneTools() {
+    final service = _service;
+    final available = service?.connected?.ready == true &&
+        service?.connected?.remotePlatform == 'android';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 4, 10, 2),
+      child: Wrap(
+        spacing: 6,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(right: 6),
+            child: Text('Данные телефона:'),
+          ),
+          OutlinedButton.icon(
+            onPressed: available ? () => _backupPersonal('contacts') : null,
+            icon: const Icon(Icons.contacts_outlined, size: 18),
+            label: const Text('Бэкап контактов'),
+          ),
+          OutlinedButton.icon(
+            onPressed: available ? () => _backupPersonal('sms') : null,
+            icon: const Icon(Icons.sms_outlined, size: 18),
+            label: const Text('Бэкап SMS'),
+          ),
+          OutlinedButton.icon(
+            onPressed: available ? _restoreContacts : null,
+            icon: const Icon(Icons.contact_phone_outlined, size: 18),
+            label: const Text('Восстановить контакты'),
+          ),
+          OutlinedButton.icon(
+            onPressed: available ? _smsRestoreInfo : null,
+            icon: const Icon(Icons.info_outline, size: 18),
+            label: const Text('Восстановить SMS…'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _body(bool compact) {
     if (_service == null) {
       return Center(child: Text(_startup));
     }
     return Column(
       children: [
+        if (!Platform.isAndroid) _phoneTools(),
         if (Platform.isAndroid && !_androidStorageGranted)
           MaterialBanner(
             content: const Text('Для просмотра общих папок Android разрешите доступ ко всем файлам в системных настройках.'),
@@ -580,14 +831,22 @@ class _FerryHomeState extends State<FerryHome> {
             alignment: WrapAlignment.center,
             children: [
               OutlinedButton.icon(
-                onPressed: () => _copy(_right, _left),
+                onPressed: _right.selected.isEmpty
+                    ? null
+                    : () => _copy(_right, _left),
                 icon: const Icon(Icons.arrow_back),
-                label: Text(compact ? 'В панель 1' : 'F5  ← Копировать'),
+                label: Text(compact
+                    ? 'Из 2 в 1 (${_right.selected.length})'
+                    : 'Из правой в левую (${_right.selected.length})'),
               ),
-              FilledButton.icon(
-                onPressed: () => _copy(_left, _right),
+              OutlinedButton.icon(
+                onPressed: _left.selected.isEmpty
+                    ? null
+                    : () => _copy(_left, _right),
                 icon: const Icon(Icons.arrow_forward),
-                label: Text(compact ? 'В панель 2' : 'F5  Копировать →'),
+                label: Text(compact
+                    ? 'Из 1 в 2 (${_left.selected.length})'
+                    : 'Из левой в правую (${_left.selected.length})'),
               ),
             ],
           ),

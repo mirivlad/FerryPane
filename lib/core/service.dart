@@ -10,6 +10,7 @@ import 'files.dart';
 import 'flow_acknowledgements.dart';
 import 'lan_networks.dart';
 import 'native_lan.dart';
+import 'personal_data.dart';
 import 'secure_peer.dart';
 import 'transfer.dart';
 
@@ -27,6 +28,12 @@ class NearbyPeer {
 class FerryService extends ChangeNotifier {
   final PeerIdentity identity;
   Future<bool> Function(String, String, String) onPairing;
+
+  /// Restoring contacts always requires approval on the Android device.
+  /// Exports instead rely on pre-granted permission for each paired key.
+  Future<bool> Function(String fileName, String requester)? onContactsImportConsent;
+  String? _contactsImportDir;
+  String? _contactsImportName;
 
   HttpServer? _http;
   RawDatagramSocket? _udp;
@@ -300,6 +307,8 @@ class FerryService extends ChangeNotifier {
         if (connected == peer) {
           _incoming?.abort();
           _incoming = null;
+          _contactsImportDir = null;
+          _contactsImportName = null;
           _discardingTransfer = false;
           _listRequest?.completeError(StateError('Disconnected: $reason'));
           _listRequest = null;
@@ -341,10 +350,34 @@ class FerryService extends ChangeNotifier {
         .where((key) => key.startsWith('trusted.')).toList();
     for (final key in trustedKeys) {
       await identity.prefs.remove(key);
-      await identity.prefs.remove('known.host.${key.substring('trusted.'.length)}');
+      final peerKey = key.substring('trusted.'.length);
+      await identity.prefs.remove('known.host.$peerKey');
+      await identity.prefs.remove('backup.contacts.$peerKey');
+      await identity.prefs.remove('backup.sms.$peerKey');
     }
     nearby.clear();
     await connected?.disconnect();
+    _notify();
+  }
+
+  bool canPeerBackup(String kind) {
+    final peer = connected;
+    if (!Platform.isAndroid || peer == null || !peer.ready) return false;
+    if (kind != 'contacts' && kind != 'sms') return false;
+    if (!identity.trusts(peer.remoteKey)) return false;
+    return identity.prefs.getBool('backup.$kind.${peer.remoteKey}') ?? false;
+  }
+
+  Future<void> allowPeerBackup(String kind, bool allowed) async {
+    final peer = connected;
+    if (!Platform.isAndroid || peer == null || !peer.ready ||
+        !identity.trusts(peer.remoteKey)) {
+      throw StateError('Сначала выполните сопряжение с доверенным устройством');
+    }
+    if (kind != 'contacts' && kind != 'sms') {
+      throw ArgumentError.value(kind, 'kind');
+    }
+    await identity.prefs.setBool('backup.$kind.${peer.remoteKey}', allowed);
     _notify();
   }
 
@@ -392,6 +425,72 @@ class FerryService extends ChangeNotifier {
       await _incoming?.abort();
       _incoming = null;
       rethrow;
+    }
+  }
+
+  Future<void> requestPhoneBackup(String kind, String localDirectory) async {
+    if (kind != 'contacts' && kind != 'sms') throw ArgumentError.value(kind);
+    final peer = connected;
+    if (peer == null || !peer.ready || peer.remotePlatform != 'android') {
+      throw StateError('Подключите Android-устройство');
+    }
+    if (_incoming != null || _sending) throw StateError('Передача уже выполняется');
+    if (!await Directory(localDirectory).exists()) {
+      throw FileSystemException('Нет каталога для резервной копии', localDirectory);
+    }
+    final transferId = _newTransferId();
+    _discardingTransfer = false;
+    _incoming = IncomingTransfer(localDirectory, _status, transferId);
+    try {
+      await peer.sendJson({
+        'type': 'personal_backup_request',
+        'kind': kind,
+        'transferId': transferId,
+      });
+      _status('Ожидается подтверждение на Android для ${kind == 'contacts' ? 'контактов' : 'SMS'}');
+    } catch (_) {
+      await _incoming?.abort();
+      _incoming = null;
+      rethrow;
+    }
+  }
+
+  Future<void> sendContactsToPhone(String filePath) async {
+    final peer = connected;
+    if (peer == null || !peer.ready || peer.remotePlatform != 'android') {
+      throw StateError('Подключите Android-устройство');
+    }
+    if (_incoming != null || _sending) throw StateError('Передача уже выполняется');
+    final source = File(filePath);
+    if (p.extension(filePath).toLowerCase() != '.vcf' ||
+        !await source.exists() || await source.length() > 100 * 1024 * 1024 ||
+        await source.length() == 0) {
+      throw const FormatException('Выберите непустой файл .vcf размером до 100 МБ');
+    }
+    final transferId = _newTransferId();
+    _sending = true;
+    _outgoingTransferId = transferId;
+    _transferComplete = Completer<void>();
+    _flowAcks.begin(transferId);
+    try {
+      await peer.sendJson({
+        'type': 'personal_contacts_import_start',
+        'transferId': transferId,
+        'fileName': p.basename(filePath),
+      });
+      await streamTransfer(
+        walkLocalSelection([filePath]), peer, _status,
+        (chunks) => _flowAcks.waitFor(transferId, chunks),
+        transferId: transferId,
+      );
+      await _transferComplete!.future.timeout(const Duration(seconds: 45));
+      _status('Файл контактов передан. Подтвердите импорт на Android.');
+    } finally {
+      _flowAcks.finish();
+      _outgoingTransferId = null;
+      _transferComplete = null;
+      _sending = false;
+      _notify();
     }
   }
 
@@ -462,6 +561,8 @@ class FerryService extends ChangeNotifier {
             await _incoming!.abort();
             _incoming = null;
             _discardingTransfer = true;
+            _contactsImportDir = null;
+            _contactsImportName = null;
           }
           _flowAcks.cancel(StateError(msg['message'] as String));
           final request = _listRequest;
@@ -479,6 +580,33 @@ class FerryService extends ChangeNotifier {
             List<String>.from(msg['paths'] as List),
             msg['transferId'] as String,
           ));
+          break;
+        case 'personal_backup_request':
+          unawaited(_sendPhonePersonalBackup(
+            peer,
+            msg['kind'] as String,
+            msg['transferId'] as String,
+          ));
+          break;
+        case 'personal_contacts_import_start':
+          if (!Platform.isAndroid || peer.remotePlatform == 'unknown') {
+            throw StateError('Импорт контактов доступен только на Android');
+          }
+          if (_incoming != null || _sending) throw StateError('Передача уже выполняется');
+          final fileName = sanitizeRelative(msg['fileName'] as String);
+          if (fileName.isEmpty || fileName.contains('/') ||
+              p.extension(fileName).toLowerCase() != '.vcf') {
+            throw const FormatException('Неверное имя файла контактов');
+          }
+          final dir = await PersonalDataBridge.prepareContactsImport();
+          _contactsImportDir = dir;
+          _contactsImportName = fileName;
+          _incoming = IncomingTransfer(dir, _status, msg['transferId'] as String);
+          _discardingTransfer = false;
+          _status('Получаем адресную книгу из ${peer.remoteName}');
+          break;
+        case 'personal_status':
+          _status(msg['message']?.toString() ?? 'Операция на телефоне завершена');
           break;
         case 'upload_start':
           if (_incoming != null || _sending) throw StateError('Receiver busy');
@@ -498,6 +626,16 @@ class FerryService extends ChangeNotifier {
           }
           final incoming = _incoming;
           if (incoming == null) throw const FormatException('Unexpected transfer frame');
+          if (_contactsImportDir != null) {
+            if (msg['type'] == 'dir') {
+              throw const FormatException('Импорт контактов не принимает папки');
+            }
+            if (msg['type'] == 'file_begin' &&
+                (msg['path'] != _contactsImportName ||
+                 (msg['size'] as num).toInt() > 100 * 1024 * 1024)) {
+              throw const FormatException('Импорт контактов: неверный файл');
+            }
+          }
           await incoming.consume(msg, peer);
           if (msg['type'] == 'transfer_end') {
             _incoming = null;
@@ -505,6 +643,16 @@ class FerryService extends ChangeNotifier {
               'type': 'transfer_complete',
               'transferId': incoming.transferId,
             });
+            final importDir = _contactsImportDir;
+            final importName = _contactsImportName;
+            _contactsImportDir = null;
+            _contactsImportName = null;
+            if (importDir != null && importName != null) {
+              unawaited(_offerContactsImport(
+                peer,
+                containedPath(importDir, importName),
+              ));
+            }
           }
           break;
         case 'flow_ack':
@@ -532,6 +680,8 @@ class FerryService extends ChangeNotifier {
         await _incoming!.abort();
         _incoming = null;
         _discardingTransfer = true;
+        _contactsImportDir = null;
+        _contactsImportName = null;
       }
     }
   }
@@ -549,6 +699,82 @@ class FerryService extends ChangeNotifier {
       _discardingTransfer = true;
       if (peer.ready) {
         await peer.sendJson({'type': 'error', 'message': '$e'});
+      }
+    }
+  }
+
+  Future<void> _sendPhonePersonalBackup(
+    SecurePeer peer,
+    String kind,
+    String transferId,
+  ) async {
+    String? tempFile;
+    try {
+      if (!Platform.isAndroid || peer.remotePlatform == 'unknown' ||
+          (kind != 'contacts' && kind != 'sms')) {
+        throw StateError('Резервное копирование поддерживается только на Android');
+      }
+      if (_sending || _incoming != null) throw StateError('Другая передача уже выполняется');
+      // No pop-up while recovering from a phone with a broken screen.
+      // Sensitive backups are opt-in and individually authorized beforehand.
+      if (!canPeerBackup(kind)) {
+        throw StateError('На телефоне заранее не разрешено резервное копирование $kind для этого ПК');
+      }
+      tempFile = await PersonalDataBridge.makeBackup(kind);
+      _sending = true;
+      _outgoingTransferId = transferId;
+      _transferComplete = Completer<void>();
+      _flowAcks.begin(transferId);
+      await streamTransfer(
+        walkLocalSelection([tempFile]), peer, _status,
+        (chunks) => _flowAcks.waitFor(transferId, chunks),
+        transferId: transferId,
+      );
+      await _transferComplete!.future.timeout(const Duration(seconds: 45));
+      _status('Резервная копия ${kind == 'contacts' ? 'контактов' : 'SMS'} передана');
+    } catch (e) {
+      _status('Резервная копия: $e');
+      if (peer.ready) {
+        await peer.sendJson({'type': 'error', 'message': '$e'});
+      }
+    } finally {
+      if (_outgoingTransferId == transferId) {
+        _flowAcks.finish();
+        _outgoingTransferId = null;
+        _transferComplete = null;
+        _sending = false;
+      }
+      if (tempFile != null) {
+        try { await File(tempFile).delete(); } catch (_) {}
+      }
+      _notify();
+    }
+  }
+
+  Future<void> _offerContactsImport(SecurePeer peer, String filePath) async {
+    try {
+      if (!await File(filePath).exists()) {
+        throw StateError('Файл контактов не был полностью получен');
+      }
+      final consent = onContactsImportConsent;
+      if (consent == null ||
+          !await consent(p.basename(filePath), peer.remoteName)) {
+        await peer.sendJson({
+          'type': 'personal_status',
+          'message': 'Импорт контактов отклонён на телефоне',
+        });
+        return;
+      }
+      final message = await PersonalDataBridge.launchContactsImport(filePath);
+      _status(message);
+      await peer.sendJson({
+        'type': 'personal_status',
+        'message': 'На Android открыто приложение импорта контактов',
+      });
+    } catch (e) {
+      _status('Не удалось открыть импорт контактов: $e');
+      if (peer.ready) {
+        await peer.sendJson({'type': 'error', 'message': 'Импорт контактов: $e'});
       }
     }
   }
