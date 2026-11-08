@@ -2,6 +2,15 @@
 
 All versions are development previews until the project has passed the device and security acceptance criteria.
 
+## 0.1.7 Preview — resumable LAN file copying
+
+- Per-file encrypted resume protocol v4 with verified source SHA-256 and separately verified retained-prefix checksums. Only missing bytes are transmitted; source revisions never corrupt existing files.
+- Durable receiving-side journals and staged partial files scoped to receiving folder, selected source paths and trusted device identity. Repeated folder transfers reuse matching completed files without creating directory or file duplicates.
+- One user-initiated unfinished copy is saved to local preferences across application restarts. Bounded automatic reconnection, explicit pause/resume/cancel and current-file progress, throughput and ETA.
+- Keep resumable data on unexpected disconnect; only completed files are published after full checksum verification. Hidden state is excluded from remote file listing/copy operations.
+- Ordinary personal Android contact/SMS backup/import remains separately permissioned and is not automatically replayed.
+- Requires **both devices to run protocol v4** (0.1.7); prior pairing identity and access rights are unchanged. Disk journal cleanup for abandoned jobs and dedicated Android foreground persistence remain future work.
+
 ## 0.1.6 Preview.2 — protocol stability hotfix
 
 - Correlate directory listings and transfer errors by request/transfer ID; stale responses cannot cancel or replace the next operation.

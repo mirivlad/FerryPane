@@ -6,14 +6,15 @@ FerryPane connects two devices on a local network and lets you browse, select an
 
 **Русская документация:** [README.ru.md](docs/README.ru.md).
 
-> **Current status: 0.1.6 Preview.** This is a functional preview, not a security-audited production release. File transfers, recovery of contacts and SMS archives should still be tested on your devices. Android background recovery is not yet implemented.
+> **Current status: 0.1.7 Preview.** This is a functional preview, not a security-audited production release. File transfers, recovery of contacts and SMS archives should still be tested on your devices. Android background recovery is not yet implemented.
 
 ## Highlights
 
 - **Two file panels.** Switch either panel between local and remote files, navigate with `..`, select individual files, directories or **Select all** (folders are copied recursively).
 - **Works without the Internet.** Connect via ordinary Wi-Fi, Ethernet or a phone hotspot. Find peers on private IPv4 subnets, or enter an IP address manually. VPN policies and firewalls may restrict discovery.
-- **Pair once.** On the receiving device explicitly open the lock icon's two-minute pairing window; then connect from the sender and compare the six-digit code on **both** devices. New peers get read-only shared-folder access; enable writing on the receiving device if needed. Trusted identities are remembered and the protocol v3 session encrypts data with transcript-bound X25519/HKDF/AES-GCM. **Both ends must run 0.1.6.**
-- **One continuous transfer.** Small files are streamed in batches rather than requiring a separate network connection for each file. Incoming files are SHA-256 checked before commit. Existing names receive a suffix instead of being silently overwritten.
+- **Pair once.** On the receiving device explicitly open the lock icon's two-minute pairing window; then connect from the sender and compare the six-digit code on **both** devices. New peers get read-only shared-folder access; enable writing on the receiving device if needed. Trusted identities are remembered and the protocol v4 session encrypts data with transcript-bound X25519/HKDF/AES-GCM. **Both ends must run 0.1.7.**
+- **Streaming transfer with real resumption.** Many small files share one encrypted connection. Interrupted ordinary file copies retain verified prefixes in a hidden destination-side journal and can restart from the last checked offset. Already completed matching files are skipped; revised source files receive a new name instead of replacing the old copy. Full SHA-256 is verified before a file becomes visible.
+- **Automatic recovery and control.** FerryPane remembers one unfinished user-initiated copy (selection, target and trusted peer), attempts bounded automatic reconnects, and can continue after the application is restarted. Current-file progress, speed and ETA are visible; Pause / Resume / Cancel operate without another pairing. Android cannot run unattended after the OS has terminated the app until the separate foreground-service feature exists.
 - **Phone backups.** Export Android contacts to `.vcf` and SMS to both structured `.json` and a standalone, searchable, offline `.html` conversation viewer. The desktop reveals the saved file in the file manager.
 - **Restore contacts in FerryPane.** Send a `.vcf` from PC to a functioning Android phone; review new/matched counts, confirm and merge using Android ContactsProvider. Existing contacts are not deleted. Some advanced vCard fields (photos and less common attributes) are not restored.
 - **Russian / English UI.** Settings → Interface language: System, Русский, English. Language preference is preserved across application restarts on all three platforms.
@@ -43,6 +44,17 @@ The Windows EXE installer installs to the current user's `%LOCALAPPDATA%\Program
 
 For local network discovery under VPNs such as NaiveProxy, FerryPane tries each suitable private IPv4 interface. Android VPN lockdown may still prohibit bypassing the tunnel. This is an Android/VPN policy, not an authorization FerryPane attempts to override.
 
+### Interrupted copying and resumable folders
+
+When a transfer is interrupted, FerryPane leaves the current incomplete file in a hidden **`.ferrypane-resume/`** directory under the *receiving* folder, and records the trusted sender's public identity, source selection and intended destination. After reconnection, already completed files are compared to their source SHA-256 and skipped. A partial file's saved prefix is SHA-256 checked independently on both sides, then only the remaining bytes are transmitted. A changed source is never appended to an unrelated partial file or used to overwrite an existing completed file.
+
+The original copy request is stored on the requesting device for recovery after an app restart. Automatic reconnection makes a bounded number of attempts; if the device is unavailable, use **Resume** or reconnect to that device manually. **Pause** keeps partial data. **Cancel** stops the operation and discards its active partial file, but leaves previously completed files untouched. File hashing runs on the local disk before transfer; expect some checking time for very large files.
+
+The hidden resume directory is internal state and is not offered to remote file browsers. Do not manually delete it during an active or resumable operation. Old aborted jobs can leave staged bytes until cleaned up; automatic background garbage collection is not implemented yet. Android contacts/SMS backups and contact imports remain separate, consent-protected operations and are not automatically retried as resumable file copies.
+
+**Compatibility:** protocol v4 requires **v0.1.7 on both devices**. The update retains stored device identities and previously approved trust/permissions; no re-pairing should be necessary. Resuming a transfer originally started with v0.1.6 is not supported (that version deleted partial files on interruption).
+
+
 ## Phone contacts and SMS
 
 To prepare for unattended **export** from a phone with a damaged screen:
@@ -62,10 +74,11 @@ More details: [Phone backups and permissions](docs/PHONE_BACKUP.md).
 
 ## Known limitations
 
-- Only one remote peer and one transfer at a time; no synchronization, resumable transfers, cancel queue or WAN relay yet.
+- Only one connected peer and one active copy at a time; no directory sync, multiple concurrent transfers or WAN relay. Automatic reconnect attempts are bounded; Android needs the app to remain running, and recovery cannot override OS battery restrictions.
 - Android storage permissions cannot reveal other apps' private data or some restricted `Android/data` paths. Some vendors may limit `READ_SMS`.
 - Android must currently stay running/foreground during transfers. FerryPane cannot silently recover data from an app killed by the OS or perform new pairing on an unusable screen.
 - Native contact import currently handles common fields; it does **not** guarantee complete fidelity for vCard photos, account settings or every address-book provider. Test imports on a spare device or with a separate backup first.
+- Unfinished transfers can consume disk space under `.ferrypane-resume/`; background cleanup for abandoned old jobs is not yet implemented. Source hashing uses additional disk I/O before sending.
 - Windows installer and Linux DEB support x64; mobile package supports Android architectures in the release build. Code signing for Windows installers is not yet implemented, so Windows SmartScreen may show an unrecognized publisher.
 - No independent security audit. Avoid relying on the preview for sensitive data over hostile networks.
 

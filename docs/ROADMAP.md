@@ -1,6 +1,6 @@
 # FerryPane roadmap
 
-**Current state: v0.1.6 Preview (November 2026).** The GitHub release artifacts are useful for LAN file transfers, but security-sensitive and Android recovery functions still need real-device validation. Items below distinguish implemented work from planned work.
+**Current state: v0.1.7 Preview (November 2026).** The GitHub release artifacts are useful for LAN file transfers, but security-sensitive and Android recovery functions still need real-device validation. Items below distinguish implemented work from planned work.
 
 ## Implemented in preview releases
 
@@ -9,6 +9,7 @@
 - [x] First pairing with human-verifiable six-digit code, persistent trust identity and encrypted application payload.
 - [x] Two-panel file manager, navigation with `..`, independent multi-selection, Select all, per-panel copy directions and Windows volume selector.
 - [x] Continuous, bounded, SHA-256-verified streaming transfer of files and nested folders.
+- [x] Interrupted LAN copy recovery with per-file prefix verification, completed-file skipping, persistent transfer journal, bounded reconnect and pause/resume/cancel controls (protocol v4, both ends 0.1.7).
 - [x] User-selected shared export directory (desktop native folder picker).
 - [x] Android contacts export to vCard and SMS export to JSON + standalone offline HTML viewer (subject to Android permissions).
 - [x] In-app contact import/merge on Android after explicit preview/approval (common fields only; real-device acceptance still pending).
@@ -27,7 +28,7 @@ Preview.2 includes operation ID matching, transfer-slot reservation for Android 
 1. **Device acceptance:** test Windows 10/11, Debian/Ubuntu, common Android vendors with and without VPN, Wi-Fi hotspot, mixed file trees and real permissions (including automatically revoked Android grants).
 2. **Reliable Android background service:** explicit, opt-in foreground notification/service and realistic screen-off/process-restart behavior for a phone paired in advance. Do not promise recovery after shutdown, new pairing on a broken screen or override of OS security.
 3. **Contact import quality:** test vCard 2.1/3.0/4.0, country codes, multiple accounts and contact properties; avoid incorrect merges and import duplicates; offer clearer dry-run details and selective import.
-4. **Transfer UX:** progress per file, clear error recovery, interruption/retry, cancellation, speed indicators, and larger batch benchmark suite (large files and 10k/100k tiny files).
+4. **Transfer UX:** add whole-job totals, better automatic expiration/cleanup of orphaned resume journals, clear error recovery and larger batch benchmark suite (large files and 10k/100k tiny files).
 5. **Security engineering:** fuzz filesystem paths, protocol versioning/capabilities, independent cryptographic review and secure storage for identity keys.
 6. **Localization quality:** review translations with native speakers, add translation regression checks and optionally more languages.
 7. **Documentation and website:** after a tested release, publish the project page/announcement on mirv.top and a Telegram-channel post. Do not claim previews are audited or fully background-capable.
