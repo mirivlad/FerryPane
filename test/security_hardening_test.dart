@@ -147,12 +147,17 @@ void main() {
 
       // Another incoming socket (whether honest or adversarial) cannot
       // replace an active session, not even momentarily.
-      final probe = await HttpClient().getUrl(
-        Uri.parse('http://127.0.0.1:${bob.boundPort}/'),
+      // Raw TCP avoids flutter_test's HttpClient interception (which returns
+      // a synthetic HTTP 400 for all ordinary HttpClient requests).
+      final probe = await Socket.connect('127.0.0.1', bob.boundPort!);
+      probe.write('GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n'
+          'Connection: close\r\n\r\n');
+      final responseBytes = await probe.first.timeout(
+        const Duration(seconds: 5),
       );
-      final response = await probe.close();
-      expect(response.statusCode, HttpStatus.conflict);
-      await response.drain<void>();
+      final statusLine = utf8.decode(responseBytes).split('\r\n').first;
+      expect(statusLine, contains('409'));
+      probe.destroy();
       expect(alice.connected?.ready, isTrue);
       expect(bob.connected?.ready, isTrue);
       expect(bob.connected?.remoteKey, aliceIdentity.publicString);
