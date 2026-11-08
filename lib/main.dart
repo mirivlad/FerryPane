@@ -46,6 +46,11 @@ class BrowserPane {
   String error = '';
 
   BrowserPane({required this.remote, required this.location});
+
+  /// Select all entries shown in this panel (not the virtual '..' row).
+  void selectAll() {
+    selected.addAll(entries.map((entry) => entry.path));
+  }
 }
 
 class FerryHome extends StatefulWidget {
@@ -632,9 +637,7 @@ class _FerryHomeState extends State<FerryHome> {
                     onPressed: pane.selected.length == pane.entries.length
                         ? null
                         : () => setState(() {
-                              pane.selected.addAll(
-                                pane.entries.map((entry) => entry.path),
-                              );
+                              pane.selectAll();
                             }),
                     icon: const Icon(Icons.select_all, size: 18),
                     label: const Text('Выделить всё'),

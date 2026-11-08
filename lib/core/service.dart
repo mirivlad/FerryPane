@@ -450,7 +450,9 @@ class FerryService extends ChangeNotifier {
     if (peer == null || !peer.ready || peer.remotePlatform != 'android') {
       throw StateError('Подключите Android-устройство');
     }
-    if (_incoming != null || _sending) throw StateError('Передача уже выполняется');
+    if (_incoming != null || _sending || _personalBackupWaiter != null) {
+      throw StateError('Передача уже выполняется');
+    }
     final folder = Directory(localDirectory);
     if (!await folder.exists()) {
       throw FileSystemException('Нет каталога для резервной копии', localDirectory);
