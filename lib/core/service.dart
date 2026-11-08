@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
 import 'files.dart';
+import 'file_operations.dart';
 import 'flow_acknowledgements.dart';
 import 'lan_networks.dart';
 import 'localization.dart';
@@ -162,6 +163,14 @@ class FerryService extends ChangeNotifier {
 
   Completer<List<FileEntry>>? _listRequest;
   int? _pendingListId;
+  Completer<FileOperationResult>? _fileOperationRequest;
+  int? _fileOperationId;
+  Completer<List<FileEntry>>? _findRequest;
+  int? _findId;
+  Completer<String>? _digestRequest;
+  int? _digestId;
+  Completer<void>? _downloadWaiter;
+  int _verifiedUploadCounter = 0;
   final FlowAcknowledgements _flowAcks = FlowAcknowledgements();
   Completer<void>? _transferComplete;
   Completer<ResumeReply>? _resumeWaiter;
@@ -414,6 +423,10 @@ class FerryService extends ChangeNotifier {
   }
 
   Future<void> cancelCopy() async {
+    final waitingDownload = _downloadWaiter;
+    if (waitingDownload != null && !waitingDownload.isCompleted) {
+      waitingDownload.completeError(StateError('Transfer cancelled'));
+    }
     _retryTimer?.cancel();
     _retrySuppressed = true;
     _cancelRequested = true;
@@ -805,6 +818,24 @@ class FerryService extends ChangeNotifier {
           _listRequest?.completeError(StateError('Disconnected: $reason'));
           _listRequest = null;
           _pendingListId = null;
+          final op = _fileOperationRequest;
+          if (op != null && !op.isCompleted) {
+            op.completeError(StateError('Disconnected: $reason'));
+          }
+          _fileOperationRequest = null;
+          _fileOperationId = null;
+          final find = _findRequest;
+          if (find != null && !find.isCompleted) {
+            find.completeError(StateError('Disconnected: $reason'));
+          }
+          _findRequest = null;
+          _findId = null;
+          final digest = _digestRequest;
+          if (digest != null && !digest.isCompleted) {
+            digest.completeError(StateError('Disconnected: $reason'));
+          }
+          _digestRequest = null;
+          _digestId = null;
           _flowAcks.cancel(StateError('Disconnected: $reason'));
           final waitResume = _resumeWaiter;
           if (waitResume != null && !waitResume.isCompleted) {
@@ -950,6 +981,110 @@ class FerryService extends ChangeNotifier {
     exportRoot = p.normalize(p.absolute(path));
     await identity.prefs.setString('ferrypane.export.root', exportRoot);
     _status(tr('Корневая общая папка: {path}', {'path': exportRoot}));
+  }
+
+  /// One mutation in flight at a time, using a request ID bound to the peer.
+  /// The receiving device revalidates every path beneath its export root.
+  Future<FileOperationResult> remoteFileOp(String action,
+      {required String path, String? target,
+      String conflict = 'keepBoth', String? expectedDigest}) async {
+    final peer = connected;
+    if (peer == null || !peer.ready) {
+      throw StateError('No connected device');
+    }
+    if (_fileOperationRequest != null) {
+      throw StateError('File operation already running');
+    }
+    final request = Completer<FileOperationResult>();
+    final id = ++_nextId;
+    _fileOperationRequest = request;
+    _fileOperationId = id;
+    try {
+      await peer.sendJson({
+        'type': 'file_op', 'id': id, 'action': action,
+        'path': path, 'target': target, 'conflict': conflict,
+        'expectedDigest': expectedDigest,
+      });
+      return await request.future.timeout(const Duration(minutes: 10));
+    } finally {
+      if (_fileOperationRequest == request) {
+        _fileOperationRequest = null;
+        _fileOperationId = null;
+      }
+    }
+  }
+
+  Future<List<FileEntry>> remoteSearch(String path, String query) async {
+    final peer = connected;
+    if (peer == null || !peer.ready) {
+      throw StateError('No connected device');
+    }
+    if (_findRequest != null) {
+      throw StateError('Search already in progress');
+    }
+    final request = Completer<List<FileEntry>>();
+    final id = ++_nextId;
+    _findRequest = request;
+    _findId = id;
+    try {
+      await peer.sendJson({
+        'type': 'find', 'id': id, 'path': path, 'query': query,
+      });
+      return await request.future.timeout(const Duration(seconds: 90));
+    } finally {
+      if (_findRequest == request) {
+        _findRequest = null;
+        _findId = null;
+      }
+    }
+  }
+
+  Future<String> remoteTreeDigest(List<String> paths) async {
+    final peer = connected;
+    if (peer == null || !peer.ready) {
+      throw StateError('No connected device');
+    }
+    if (_digestRequest != null) {
+      throw StateError('Another digest is in progress');
+    }
+    final request = Completer<String>();
+    final id = ++_nextId;
+    _digestRequest = request;
+    _digestId = id;
+    try {
+      await peer.sendJson({'type': 'tree_digest', 'id': id, 'paths': paths});
+      return await request.future.timeout(const Duration(minutes: 10));
+    } finally {
+      if (_digestRequest == request) {
+        _digestRequest = null;
+        _digestId = null;
+      }
+    }
+  }
+
+  /// Returns only when the receiver verified all file checksums and
+  /// acknowledged transfer_end. Used before any cross-device source deletion.
+  Future<void> downloadAndWait(List<String> paths, String destination) async {
+    if (_downloadWaiter != null || hasPendingCopy) {
+      throw StateError('Another pending transfer exists');
+    }
+    final waiting = Completer<void>();
+    _downloadWaiter = waiting;
+    try {
+      await download(paths, destination);
+      await waiting.future;
+    } finally {
+      if (_downloadWaiter == waiting) _downloadWaiter = null;
+    }
+  }
+
+  Future<bool> uploadVerified(List<String> paths, String destination) async {
+    if (hasPendingCopy) {
+      throw StateError('Another pending transfer exists');
+    }
+    final counter = _verifiedUploadCounter;
+    await upload(paths, destination);
+    return _verifiedUploadCounter > counter;
   }
 
   Future<List<FileEntry>> remoteList(String path) async {
@@ -1167,6 +1302,7 @@ class FerryService extends ChangeNotifier {
       await _transferComplete!.future.timeout(const Duration(seconds: 45));
       _status(tr('Загрузка завершена и подтверждена получателем'));
       if (_pendingJob != null) await _finishJob();
+      _verifiedUploadCounter++;
     } catch (e) {
       // Failure is not success. Never erase the only persisted selection on
       // an ambiguous socket-close / acknowledgement race. A genuinely
@@ -1193,14 +1329,82 @@ class FerryService extends ChangeNotifier {
         throw StateError('Message from unauthenticated peer');
       }
       final type = msg['type'];
-      if ((type == 'list' || type == 'download') && !peerCanRead) {
+      if ((type == 'list' || type == 'find' || type == 'tree_digest' ||
+          type == 'download') && !peerCanRead) {
         throw StateError('This device has no permission to read shared files');
       }
-      if ((type == 'upload_start' || type == 'personal_contacts_import_start') &&
-          !peerCanWrite) {
+      if ((type == 'upload_start' || type == 'personal_contacts_import_start' ||
+          type == 'file_op') && !peerCanWrite) {
         throw StateError('This device has no permission to write shared files');
       }
       switch (type) {
+        case 'file_op':
+          if (_sending || _incoming != null) {
+            throw StateError('File transfer in progress');
+          }
+          final result = await FileManagerOps.remote(
+            exportRoot, msg['action'] as String,
+            path: msg['path'] as String,
+            target: msg['target'] as String?,
+            conflict: msg['conflict'] as String? ?? 'keepBoth',
+            expectedDigest: msg['expectedDigest'] as String?,
+          );
+          await peer.sendJson({
+            'type': 'file_op_result', 'id': msg['id'],
+            'path': result.path, 'skipped': result.skipped,
+          });
+          break;
+        case 'file_op_result':
+          final waitingOp = _fileOperationRequest;
+          if (msg['id'] == _fileOperationId &&
+              waitingOp != null && !waitingOp.isCompleted) {
+            waitingOp.complete(FileOperationResult(
+              msg['path'] as String,
+              skipped: msg['skipped'] == true,
+            ));
+          }
+          break;
+        case 'tree_digest':
+          final checksum = await FileManagerOps.digestRemote(
+            exportRoot, List<String>.from(msg['paths'] as List),
+          );
+          await peer.sendJson({
+            'type': 'tree_digest_result', 'id': msg['id'],
+            'digest': checksum,
+          });
+          break;
+        case 'tree_digest_result':
+          final waitingDigest = _digestRequest;
+          if (msg['id'] == _digestId &&
+              waitingDigest != null && !waitingDigest.isCompleted) {
+            final value = msg['digest'];
+            if (value is! String ||
+                !RegExp(r'^[a-f0-9]{64}$').hasMatch(value)) {
+              throw const FormatException('Invalid checksum response');
+            }
+            waitingDigest.complete(value);
+          }
+          break;
+        case 'find':
+          final matches = await FileManagerOps.search(
+            exportRoot, msg['path'] as String, msg['query'] as String,
+          );
+          await peer.sendJson({
+            'type': 'find_result', 'id': msg['id'],
+            'entries': matches.map((entry) => entry.toJson()).toList(),
+          });
+          break;
+        case 'find_result':
+          final waitingFind = _findRequest;
+          if (msg['id'] == _findId &&
+              waitingFind != null && !waitingFind.isCompleted) {
+            waitingFind.complete(
+              (msg['entries'] as List).map((entry) =>
+                FileEntry.fromJson(Map<String, dynamic>.from(entry as Map))
+              ).toList(),
+            );
+          }
+          break;
         case 'list':
           final id = msg['id'];
           try {
@@ -1243,6 +1447,24 @@ class FerryService extends ChangeNotifier {
             request.completeError(reason);
             handled = true;
           }
+          final op = _fileOperationRequest;
+          if (requestId != null && requestId == _fileOperationId &&
+              op != null && !op.isCompleted) {
+            op.completeError(reason);
+            handled = true;
+          }
+          final find = _findRequest;
+          if (requestId != null && requestId == _findId &&
+              find != null && !find.isCompleted) {
+            find.completeError(reason);
+            handled = true;
+          }
+          final digest = _digestRequest;
+          if (requestId != null && requestId == _digestId &&
+              digest != null && !digest.isCompleted) {
+            digest.completeError(reason);
+            handled = true;
+          }
           final pendingBackup = _personalBackupWaiter;
           if (transferId != null && transferId == _personalBackupId &&
               pendingBackup != null && !pendingBackup.isCompleted) {
@@ -1265,6 +1487,10 @@ class FerryService extends ChangeNotifier {
           final incoming = _incoming;
           if (transferId != null && incoming != null &&
               transferId == incoming.transferId) {
+            final waitingDownload = _downloadWaiter;
+            if (waitingDownload != null && !waitingDownload.isCompleted) {
+              waitingDownload.completeError(reason);
+            }
             await incoming.abort();
             _setIncoming(null);
             _discardingTransfer = true;
@@ -1440,6 +1666,10 @@ class FerryService extends ChangeNotifier {
                 _pendingJob!['scope'] == incoming.resumeStore?.scope &&
                 _pendingJob!['paused'] != true) {
               await _finishJob();
+              final waitingDownload = _downloadWaiter;
+              if (waitingDownload != null && !waitingDownload.isCompleted) {
+                waitingDownload.complete();
+              }
             }
             final importDir = _contactsImportDir;
             final importName = _contactsImportName;
@@ -1486,6 +1716,10 @@ class FerryService extends ChangeNotifier {
       final incoming = _incoming;
       // Only an error in *this transfer* can discard that transfer's data.
       if (incoming != null && msg['transferId'] == incoming.transferId) {
+        final downloadWaiter = _downloadWaiter;
+        if (downloadWaiter != null && !downloadWaiter.isCompleted) {
+          downloadWaiter.completeError(e);
+        }
         // Ordinary resumable copies keep their staged bytes on uncertain
         // transport/protocol failures. A subsequent attempt validates the
         // source digest and both prefix hashes before reusing any bytes.
@@ -1508,6 +1742,11 @@ class FerryService extends ChangeNotifier {
       _touchIncoming();
     } catch (e) {
       _status(tr('Ошибка файловой передачи: {error}', {'error': e}));
+      final downloadWaiter = _downloadWaiter;
+      if (connected == peer && peer.ready &&
+          downloadWaiter != null && !downloadWaiter.isCompleted) {
+        downloadWaiter.completeError(e);
+      }
       // A socket can close while an already-dispatched chunk is still
       // being written. In that case the disconnect handler is preserving
       // this partial transfer; do not race it with a destructive abort.
@@ -1696,6 +1935,10 @@ class FerryService extends ChangeNotifier {
 
   @override
   void dispose() {
+    final waitingDownload = _downloadWaiter;
+    if (waitingDownload != null && !waitingDownload.isCompleted) {
+      waitingDownload.completeError(StateError('FerryPane service stopped'));
+    }
     _disposed = true;
     _beacon?.cancel();
     _pairingTimer?.cancel();

@@ -38,6 +38,52 @@ class AppLanguage {
   }
 
   static const Map<String, String> _en = {
+    'Новая папка': 'New folder',
+    'Поиск…': 'Search…',
+    'Поиск файлов и папок': 'Find files and folders',
+    'Название': 'Name',
+    'ОК': 'OK',
+    'Недопустимое имя': 'Invalid name',
+    'Не удалось создать папку: {error}': 'Could not create folder: {error}',
+    'Имя уже занято': 'Name already exists',
+    'Выберите действие при совпадении имён.':
+        'Choose what to do when a name already exists.',
+    'Пропустить': 'Skip',
+    'Сохранить оба': 'Keep both',
+    'Заменить': 'Replace',
+    'Переименовать': 'Rename',
+    'Ошибка переименования: {error}': 'Rename failed: {error}',
+    'Удалить навсегда?': 'Delete permanently?',
+    'Удаление без корзины, включая содержимое папок. Объектов: {count}':
+        'Permanently delete {count} items, including contents of folders?',
+    'Удалить': 'Delete',
+    'Ошибка удаления: {error}': 'Deletion failed: {error}',
+    'Свойства': 'Properties',
+    'Папка': 'Folder',
+    'Файл': 'File',
+    'Ошибка поиска: {error}': 'Search failed: {error}',
+    'Вырезано. Выберите каталог назначения.':
+        'Cut. Select a destination folder.',
+    'Скопировано. Выберите каталог назначения.':
+        'Copied. Select a destination folder.',
+    'Устройство изменилось. Скопируйте файлы заново.':
+        'Connected device changed. Copy the selection again.',
+    'Перемещение между устройствами недоступно без подтверждения целостности. Сначала скопируйте файлы.':
+        'Moving between devices requires a verified copy. Copy first, then remove the originals.',
+    'Ошибка файловой операции: {error}': 'File operation failed: {error}',
+    'Операция выполнена или передача запущена':
+        'Operation completed or transfer started',
+    'Файловые операции': 'File operations',
+    'Копировать': 'Copy',
+    'Вырезать': 'Cut',
+    'Вставить': 'Paste',
+    'Сортировка: ': 'Sort by: ',
+    'Обратный порядок': 'Reverse order',
+    'Действия с файлом': 'File actions',
+    'Результаты поиска': 'Search results',
+    'Переместить вправо': 'Move right',
+    'Переместить влево': 'Move left',
+
     'Фоновый доступ к телефону': 'Background access to this phone',
     'Постоянное уведомление. Только ранее сопряжённые устройства; без новых запросов на телефоне. После перезагрузки проверьте запуск вручную.': 'Persistent notification. Previously paired devices only; no new prompts on the phone. Start again manually after a reboot.',
     'Фоновая служба запущена. Доступ имеют только доверенные устройства.': 'Background service enabled. Only trusted devices can connect.',

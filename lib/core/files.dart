@@ -78,14 +78,19 @@ class FileEntry {
   final String path;
   final bool directory;
   final int size;
+  final DateTime? modified;
 
-  const FileEntry(this.name, this.path, this.directory, this.size);
+  const FileEntry(this.name, this.path, this.directory, this.size,
+      [this.modified]);
 
   factory FileEntry.fromJson(Map<String, dynamic> j) => FileEntry(
         j['name'] as String,
         j['path'] as String,
         j['directory'] as bool,
         (j['size'] as num?)?.toInt() ?? 0,
+        j['modified'] is num
+            ? DateTime.fromMillisecondsSinceEpoch((j['modified'] as num).toInt())
+            : null,
       );
 
   Map<String, dynamic> toJson() => {
@@ -93,6 +98,7 @@ class FileEntry {
         'path': path,
         'directory': directory,
         'size': size,
+        if (modified != null) 'modified': modified!.millisecondsSinceEpoch,
       };
 }
 
@@ -102,13 +108,18 @@ Future<List<FileEntry>> listAt(String base, String relative) async {
   await for (final node in dir.list(followLinks: false)) {
     final type = await FileSystemEntity.type(node.path, followLinks: false);
     if (type == FileSystemEntityType.link ||
-        p.basename(node.path) == _internalResumeDir) continue;
+        p.basename(node.path) == _internalResumeDir ||
+        p.basename(node.path).startsWith('.ferrypane-stage-') ||
+        p.basename(node.path).startsWith('.ferrypane-backup-')) continue;
     if (type != FileSystemEntityType.directory &&
         type != FileSystemEntityType.file) continue;
     final name = p.basename(node.path);
     final rel = relative.isEmpty ? name : '${sanitizeRelative(relative)}/$name';
     final isDir = type == FileSystemEntityType.directory;
-    output.add(FileEntry(name, rel, isDir, isDir ? 0 : await File(node.path).length()));
+    final stat = await node.stat();
+    output.add(FileEntry(
+      name, rel, isDir, isDir ? 0 : stat.size, stat.modified,
+    ));
   }
   output.sort((a, b) {
     if (a.directory != b.directory) return a.directory ? -1 : 1;

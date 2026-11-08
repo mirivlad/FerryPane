@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import 'package:permission_handler/permission_handler.dart';
 
 import 'core/files.dart';
+import 'core/file_operations.dart';
 import 'core/desktop_locations.dart';
 import 'core/service.dart';
 import 'core/personal_data.dart';
@@ -54,6 +55,16 @@ class FerryPaneApp extends StatelessWidget {
   );
 }
 
+enum PaneSort { name, size, date, type }
+
+class FileClipboard {
+  final bool remote;
+  final bool cut;
+  final List<String> paths;
+  final String? peerIdentity;
+  FileClipboard(this.remote, this.cut, this.paths, this.peerIdentity);
+}
+
 class BrowserPane {
   bool remote;
   String location;
@@ -61,6 +72,9 @@ class BrowserPane {
   Set<String> selected = {};
   bool busy = false;
   String error = '';
+  PaneSort sort = PaneSort.name;
+  bool descending = false;
+  bool searchResults = false;
 
   BrowserPane({required this.remote, required this.location});
 
@@ -82,6 +96,8 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
   late final BrowserPane _left;
   late final BrowserPane _right;
   int _active = 0;
+  FileClipboard? _clipboard;
+  bool _fileOperationBusy = false;
   String _knownConnection = '';
   String _startup = tr('Запуск…');
   bool _androidStorageGranted = !Platform.isAndroid;
@@ -379,6 +395,7 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
       pane.busy = true;
       pane.error = '';
       pane.selected.clear();
+      pane.searchResults = false;
     });
     try {
       List<FileEntry> files;
@@ -392,6 +409,7 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
                   p.join(pane.location, item.name),
                   item.directory,
                   item.size,
+                  item.modified,
                 ))
             .toList();
       }
@@ -462,45 +480,369 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _copy(BrowserPane from, BrowserPane to) async {
-    final paths = from.selected.toList();
-    if (paths.isEmpty) {
-      _notice(tr('Сначала выделите файлы или папки.'));
-      return;
-    }
-    try {
-      if (!from.remote && to.remote) {
-        await _service!.upload(paths, to.location);
-      } else if (from.remote && !to.remote) {
-        await _service!.download(paths, to.location);
-      } else if (!from.remote && !to.remote) {
-        await _copyLocal(paths, to.location);
-      } else {
-        _notice(tr('Копирование между двумя удалёнными панелями пока не поддерживается.'));
-        return;
+
+  List<FileEntry> _sorted(BrowserPane pane) {
+    final entries = List<FileEntry>.from(pane.entries);
+    entries.sort((a, b) {
+      if (a.directory != b.directory) return a.directory ? -1 : 1;
+      int n;
+      switch (pane.sort) {
+        case PaneSort.name:
+          n = a.name.toLowerCase().compareTo(b.name.toLowerCase());
+        case PaneSort.size:
+          n = a.size.compareTo(b.size);
+        case PaneSort.date:
+          n = (a.modified ?? DateTime(1970))
+              .compareTo(b.modified ?? DateTime(1970));
+        case PaneSort.type:
+          n = p.extension(a.name).compareTo(p.extension(b.name));
       }
-      from.selected.clear();
-      if (!from.remote && !to.remote) await _load(to);
-      _notice(tr(_service?.hasPendingCopy == true
-          ? 'Передача запущена. Докачка включена.'
-          : 'Передача завершена'));
-    } catch (e) {
-      _notice(tr('Ошибка копирования: {error}', {'error': e}));
+      if (n == 0) n = a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      return pane.descending ? -n : n;
+    });
+    return entries;
+  }
+
+  String _panePath(BrowserPane pane, String filename) =>
+      pane.remote ? p.posix.join(pane.location, filename) :
+          p.join(pane.location, filename);
+
+  String _basename(bool remote, String filename) =>
+      remote ? p.posix.basename(filename) : p.basename(filename);
+
+  Future<String?> _textDialog(String title, String initial) async {
+    final controller = TextEditingController(text: initial);
+    try {
+      return await showDialog<String>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(tr(title)),
+          content: TextField(
+            autofocus: true, controller: controller,
+            decoration: InputDecoration(labelText: tr('Название')),
+            onSubmitted: (value) => Navigator.pop(dialogContext, value.trim()),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogContext),
+                child: Text(tr('Отмена'))),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, controller.text.trim()),
+              child: Text(tr('ОК')),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      controller.dispose();
     }
   }
 
-  Future<void> _copyLocal(List<String> paths, String destination) async {
-    await for (final item in walkLocalSelection(paths)) {
-      final target = containedPath(destination, item.relative);
-      if (item.directory) {
-        await Directory(target).create(recursive: true);
-      } else {
-        await Directory(p.dirname(target)).create(recursive: true);
-        if (await File(target).exists()) {
-          throw FileSystemException('Целевой файл уже существует', target);
-        }
-        await File(item.absolute).copy(target);
+  bool _validName(String name) =>
+      name.isNotEmpty && name != '.' && name != '..' &&
+      !name.contains('/') && !name.contains('\\') && !name.contains('\u0000');
+
+  Future<FileOperationResult> _runFileOp(BrowserPane pane,
+      String op, String path, {String? target, String conflict = 'keepBoth'}) =>
+      pane.remote
+          ? _service!.remoteFileOp(op, path: path,
+              target: target, conflict: conflict)
+          : FileManagerOps.local(op, path: path,
+              target: target, conflict: conflict);
+
+  Future<void> _newFolder(BrowserPane pane) async {
+    final name = await _textDialog('Новая папка', '');
+    if (name == null) return;
+    if (!_validName(name)) { _notice(tr('Недопустимое имя')); return; }
+    try {
+      await _runFileOp(pane, 'mkdir', _panePath(pane, name));
+      await _load(pane);
+    } catch (e) {
+      _notice(tr('Не удалось создать папку: {error}', {'error': e}));
+    }
+  }
+
+  Future<String?> _conflict() async => showDialog<String>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: Text(tr('Имя уже занято')),
+      content: Text(tr('Выберите действие при совпадении имён.')),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(dialogContext, 'skip'),
+            child: Text(tr('Пропустить'))),
+        TextButton(onPressed: () => Navigator.pop(dialogContext, 'keepBoth'),
+            child: Text(tr('Сохранить оба'))),
+        FilledButton(onPressed: () => Navigator.pop(dialogContext, 'replace'),
+            child: Text(tr('Заменить'))),
+      ],
+    ),
+  );
+
+  Future<void> _renameFile(BrowserPane pane, FileEntry entry) async {
+    final name = await _textDialog('Переименовать', entry.name);
+    if (name == null || name == entry.name) return;
+    if (!_validName(name)) { _notice(tr('Недопустимое имя')); return; }
+    final parent = pane.remote
+        ? p.posix.dirname(entry.path) : p.dirname(entry.path);
+    final destination = pane.remote
+        ? p.posix.join(parent, name) : p.join(parent, name);
+    try {
+      String conflict = 'keepBoth';
+      if (pane.entries.any((e) => e.path == destination)) {
+        final choice = await _conflict();
+        if (choice == null) return;
+        conflict = choice;
       }
+      await _runFileOp(pane, 'rename', entry.path,
+          target: destination, conflict: conflict);
+      await _load(pane);
+    } catch (e) {
+      _notice(tr('Ошибка переименования: {error}', {'error': e}));
+    }
+  }
+
+  Future<void> _deleteFiles(BrowserPane pane, List<FileEntry> entries) async {
+    if (entries.isEmpty) return;
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(tr('Удалить навсегда?')),
+        content: Text(tr('Удаление без корзины, включая содержимое папок. '
+            'Объектов: {count}', {'count': entries.length})),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false),
+              child: Text(tr('Отмена'))),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true),
+              child: Text(tr('Удалить'))),
+        ],
+      ),
+    );
+    if (accepted != true) return;
+    try {
+      for (final entry in entries) {
+        await _runFileOp(pane, 'delete', entry.path);
+      }
+      await _load(pane);
+    } catch (e) {
+      await _load(pane);
+      _notice(tr('Ошибка удаления: {error}', {'error': e}));
+    }
+  }
+
+  Future<void> _properties(FileEntry entry) async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(tr('Свойства')),
+        content: SelectableText([
+          entry.name, entry.path,
+          entry.directory ? tr('Папка') : tr('Файл'),
+          if (!entry.directory) _humanSize(entry.size),
+          if (entry.modified != null) entry.modified!.toLocal().toString(),
+        ].join('\n')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext),
+              child: Text(tr('Закрыть'))),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _search(BrowserPane pane) async {
+    final query = await _textDialog('Поиск файлов и папок', '');
+    if (query == null || query.trim().isEmpty) return;
+    setState(() => pane.busy = true);
+    try {
+      final result = pane.remote
+          ? await _service!.remoteSearch(pane.location, query)
+          : (await FileManagerOps.search(pane.location, '', query))
+              .map((entry) => FileEntry(entry.name,
+                  p.join(pane.location, entry.path.replaceAll('/', p.separator)),
+                  entry.directory, entry.size, entry.modified))
+              .toList();
+      if (mounted) setState(() {
+        pane.entries = result;
+        pane.searchResults = true;
+        pane.selected.clear();
+      });
+    } catch (e) {
+      _notice(tr('Ошибка поиска: {error}', {'error': e}));
+    } finally {
+      if (mounted) setState(() => pane.busy = false);
+    }
+  }
+
+  void _clipboardCopy(BrowserPane pane, bool cut) {
+    if (pane.selected.isEmpty) return;
+    setState(() => _clipboard =
+        FileClipboard(pane.remote, cut, pane.selected.toList(),
+            pane.remote ? _service?.connected?.remoteKey : null));
+    _notice(tr(cut ? 'Вырезано. Выберите каталог назначения.' :
+        'Скопировано. Выберите каталог назначения.'));
+  }
+
+
+  /// Cross-device move: copy, await authenticated transfer completion, verify
+  /// each tree on both endpoints, then delete only the original matching
+  /// the pre-copy SHA-256 tree digest. Failed/partial copies retain originals.
+  Future<void> _moveAcross(BrowserPane from, BrowserPane to,
+      List<String> sourcePaths) async {
+    final service = _service!;
+    if (service.hasPendingCopy || sourcePaths.isEmpty ||
+        sourcePaths.length > 64) {
+      throw StateError('Finish the previous transfer or select up to 64 items');
+    }
+    final destinations = sourcePaths
+        .map((source) => _panePath(to, _basename(from.remote, source)))
+        .toList();
+    for (var i = 0; i < sourcePaths.length; i++) {
+      for (var j = 0; j < sourcePaths.length; j++) {
+        if (i == j) continue;
+        if (from.remote
+            ? p.posix.isWithin(sourcePaths[i], sourcePaths[j])
+            : p.isWithin(sourcePaths[i], sourcePaths[j])) {
+          throw StateError('Nested selected sources cannot be moved together');
+        }
+      }
+    }
+    if (destinations.map((x) => x.toLowerCase()).toSet().length !=
+        destinations.length) {
+      throw StateError('Selected files contain duplicate names');
+    }
+    // Never permit a partial merge or receiver suffix to masquerade as move.
+    final existing = to.remote
+        ? await service.remoteList(to.location)
+        : await listAt(to.location, '');
+    final names = existing.map((item) => item.name.toLowerCase()).toSet();
+    if (destinations.any((path) =>
+        names.contains(_basename(to.remote, path).toLowerCase()))) {
+      throw StateError('Destination already contains selected names. '
+          'Choose an empty destination folder for a safe move.');
+    }
+
+    final originalDigests = <String, String>{};
+    for (final source in sourcePaths) {
+      originalDigests[source] = from.remote
+          ? await service.remoteTreeDigest([source])
+          : await FileManagerOps.digestLocal([source]);
+    }
+
+    if (from.remote) {
+      await service.downloadAndWait(sourcePaths, to.location);
+    } else {
+      if (!await service.uploadVerified(sourcePaths, to.location)) {
+        throw StateError('Transfer not verified; original files preserved');
+      }
+    }
+
+    // Verify receiver bytes and ensure the original was not modified by
+    // another application during the transfer.
+    for (var i = 0; i < sourcePaths.length; i++) {
+      final source = sourcePaths[i];
+      final target = destinations[i];
+      final expected = originalDigests[source]!;
+      final received = to.remote
+          ? await service.remoteTreeDigest([target])
+          : await FileManagerOps.digestLocal([target]);
+      final current = from.remote
+          ? await service.remoteTreeDigest([source])
+          : await FileManagerOps.digestLocal([source]);
+      if (received != expected || current != expected) {
+        throw StateError('Content changed or destination mismatched; '
+            'original files were preserved');
+      }
+    }
+
+    // Each destructive command independently rechecks the expected digest.
+    for (final source in sourcePaths) {
+      if (from.remote) {
+        await service.remoteFileOp('deleteVerified',
+            path: source, expectedDigest: originalDigests[source]);
+      } else {
+        await FileManagerOps.local('deleteVerified',
+            path: source, expectedDigest: originalDigests[source]);
+      }
+    }
+  }
+
+  Future<void> _paste(BrowserPane pane) async {
+    final item = _clipboard;
+    if (item == null || _fileOperationBusy) return;
+    if (item.remote &&
+        item.peerIdentity != _service?.connected?.remoteKey) {
+      _notice(tr('Устройство изменилось. Скопируйте файлы заново.'));
+      return;
+    }
+    setState(() => _fileOperationBusy = true);
+    try {
+      if (item.cut && item.remote != pane.remote) {
+        final source = BrowserPane(remote: item.remote, location: '');
+        await _moveAcross(source, pane, item.paths);
+      } else if (item.remote == pane.remote) {
+        for (final source in item.paths) {
+          final dest = _panePath(pane, _basename(item.remote, source));
+          var conflict = 'keepBoth';
+          final exists = pane.entries.any((e) => e.path == dest) ||
+              (!pane.remote && await FileSystemEntity.type(
+                  dest, followLinks: false) != FileSystemEntityType.notFound);
+          if (exists) {
+            final choice = await _conflict();
+            if (choice == null) return;
+            conflict = choice;
+          }
+          await _runFileOp(pane, item.cut ? 'move' : 'copy', source,
+              target: dest, conflict: conflict);
+        }
+      } else if (item.remote) {
+        await _service!.download(item.paths, pane.location);
+      } else {
+        await _service!.upload(item.paths, pane.location);
+      }
+      if (item.cut) setState(() => _clipboard = null);
+      await _load(pane);
+    } catch (e) {
+      _notice(tr('Ошибка файловой операции: {error}', {'error': e}));
+    } finally {
+      if (mounted) setState(() => _fileOperationBusy = false);
+    }
+  }
+
+  Future<void> _copy(BrowserPane from, BrowserPane to, {bool move = false}) async {
+    if (from.selected.isEmpty || _fileOperationBusy) return;
+    setState(() => _fileOperationBusy = true);
+    try {
+      final selected = from.selected.toList();
+      if (move && from.remote != to.remote) {
+        await _moveAcross(from, to, selected);
+        await _load(to);
+        await _load(from);
+      } else if (from.remote == to.remote) {
+        for (final source in selected) {
+          final dest = _panePath(to, _basename(from.remote, source));
+          var conflict = 'keepBoth';
+          final exists = to.entries.any((e) => e.path == dest) ||
+              (!to.remote && await FileSystemEntity.type(
+                  dest, followLinks: false) != FileSystemEntityType.notFound);
+          if (exists) {
+            final choice = await _conflict();
+            if (choice == null) return;
+            conflict = choice;
+          }
+          await _runFileOp(to, move ? 'move' : 'copy', source,
+              target: dest, conflict: conflict);
+        }
+        await _load(to);
+        if (move) await _load(from);
+      } else if (from.remote) {
+        await _service!.download(selected, to.location);
+      } else {
+        await _service!.upload(selected, to.location);
+      }
+      from.selected.clear();
+      _notice(tr('Операция выполнена или передача запущена'));
+    } catch (e) {
+      _notice(tr('Ошибка копирования: {error}', {'error': e}));
+    } finally {
+      if (mounted) setState(() => _fileOperationBusy = false);
     }
   }
 
@@ -779,6 +1121,7 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
     final service = _service;
     final ready = service?.connected?.ready ?? false;
     final disabled = pane.remote && !ready;
+    final entries = _sorted(pane);
     return Card(
       margin: const EdgeInsets.all(4),
       clipBehavior: Clip.antiAlias,
@@ -830,6 +1173,62 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
                   onPressed: disabled ? null : () => _load(pane),
                   icon: const Icon(Icons.refresh),
                 ),
+                PopupMenuButton<String>(
+                  enabled: !disabled,
+                  tooltip: tr('Файловые операции'),
+                  icon: const Icon(Icons.more_vert),
+                  onSelected: (value) {
+                    if (value == 'folder') {
+                      unawaited(_newFolder(pane));
+                    } else if (value == 'search') {
+                      unawaited(_search(pane));
+                    } else if (value == 'rename' && pane.selected.length == 1) {
+                      final entry = pane.entries.firstWhere(
+                          (e) => pane.selected.contains(e.path));
+                      unawaited(_renameFile(pane, entry));
+                    } else if (value == 'delete') {
+                      unawaited(_deleteFiles(pane, pane.entries
+                          .where((e) => pane.selected.contains(e.path)).toList()));
+                    } else if (value == 'copy') {
+                      _clipboardCopy(pane, false);
+                    } else if (value == 'cut') {
+                      _clipboardCopy(pane, true);
+                    } else if (value == 'paste') {
+                      unawaited(_paste(pane));
+                    } else if (value == 'reverse') {
+                      setState(() => pane.descending = !pane.descending);
+                    } else if (value.startsWith('sort_')) {
+                      setState(() => pane.sort = PaneSort.values.firstWhere(
+                          (e) => e.name == value.substring(5)));
+                    }
+                  },
+                  itemBuilder: (_) => [
+                    PopupMenuItem(value: 'folder', child: Text(tr('Новая папка'))),
+                    PopupMenuItem(value: 'search', child: Text(tr('Поиск…'))),
+                    PopupMenuItem(value: 'rename',
+                        enabled: pane.selected.length == 1,
+                        child: Text(tr('Переименовать'))),
+                    PopupMenuItem(value: 'delete',
+                        enabled: pane.selected.isNotEmpty,
+                        child: Text(tr('Удалить'))),
+                    PopupMenuItem(value: 'copy',
+                        enabled: pane.selected.isNotEmpty,
+                        child: Text(tr('Копировать'))),
+                    PopupMenuItem(value: 'cut',
+                        enabled: pane.selected.isNotEmpty,
+                        child: Text(tr('Вырезать'))),
+                    PopupMenuItem(value: 'paste',
+                        enabled: _clipboard != null,
+                        child: Text(tr('Вставить'))),
+                    const PopupMenuDivider(),
+                    ...PaneSort.values.map((mode) => PopupMenuItem(
+                      value: 'sort_' + mode.name,
+                      child: Text(tr('Сортировка: ') + mode.name),
+                    )),
+                    PopupMenuItem(value: 'reverse',
+                        child: Text(tr('Обратный порядок'))),
+                  ],
+                ),
               ],
             ),
           ),
@@ -838,7 +1237,8 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
             child: Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                pane.remote ? '/${pane.location}' : pane.location,
+                (pane.remote ? '/' + pane.location : pane.location) +
+                    (pane.searchResults ? ' • ' + tr('Результаты поиска') : ''),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.bodySmall,
@@ -883,7 +1283,7 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
                         ),
                       )
                     : ListView.builder(
-                        itemCount: pane.entries.length + 1,
+                        itemCount: entries.length + 1,
                         itemBuilder: (context, i) {
                           if (i == 0) {
                             final root = pane.remote
@@ -897,7 +1297,7 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
                               onTap: root ? null : () => _goUp(pane),
                             );
                           }
-                          final entry = pane.entries[i - 1];
+                          final entry = entries[i - 1];
                           final selected = pane.selected.contains(entry.path);
                           return ListTile(
                             dense: true,
@@ -907,16 +1307,53 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
                               color: entry.directory ? Theme.of(context).colorScheme.primary : null,
                             ),
                             title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                            subtitle: entry.directory ? null : Text(_humanSize(entry.size)),
-                            trailing: Checkbox(
-                              value: selected,
-                              onChanged: (value) => setState(() {
-                                if (value == true) {
-                                  pane.selected.add(entry.path);
-                                } else {
-                                  pane.selected.remove(entry.path);
-                                }
-                              }),
+                            subtitle: Text(
+                              pane.searchResults ? entry.path :
+                                  (entry.directory ? '' : _humanSize(entry.size)),
+                              maxLines: 1, overflow: TextOverflow.ellipsis,
+                            ),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Checkbox(
+                                  value: selected,
+                                  onChanged: (value) => setState(() {
+                                    if (value == true) {
+                                      pane.selected.add(entry.path);
+                                    } else {
+                                      pane.selected.remove(entry.path);
+                                    }
+                                  }),
+                                ),
+                                PopupMenuButton<String>(
+                                  tooltip: tr('Действия с файлом'),
+                                  icon: const Icon(Icons.more_vert, size: 18),
+                                  onSelected: (action) {
+                                    if (action == 'rename') {
+                                      unawaited(_renameFile(pane, entry));
+                                    } else if (action == 'delete') {
+                                      unawaited(_deleteFiles(pane, [entry]));
+                                    } else if (action == 'properties') {
+                                      unawaited(_properties(entry));
+                                    } else if (action == 'copy' || action == 'cut') {
+                                      setState(() => pane.selected = {entry.path});
+                                      _clipboardCopy(pane, action == 'cut');
+                                    }
+                                  },
+                                  itemBuilder: (_) => [
+                                    PopupMenuItem(value: 'rename',
+                                        child: Text(tr('Переименовать'))),
+                                    PopupMenuItem(value: 'delete',
+                                        child: Text(tr('Удалить'))),
+                                    PopupMenuItem(value: 'copy',
+                                        child: Text(tr('Копировать'))),
+                                    PopupMenuItem(value: 'cut',
+                                        child: Text(tr('Вырезать'))),
+                                    PopupMenuItem(value: 'properties',
+                                        child: Text(tr('Свойства'))),
+                                  ],
+                                ),
+                              ],
                             ),
                             onTap: () => _open(pane, entry),
                           );
@@ -1156,6 +1593,24 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
                 label: Text(compact
                     ? tr('Из 2 в 1 ({count})', {'count': _right.selected.length})
                     : tr('Из правой в левую ({count})', {'count': _right.selected.length})),
+              ),
+              OutlinedButton.icon(
+                onPressed: _left.selected.isEmpty || _fileOperationBusy
+                    ? null : () => _copy(_left, _right, move: true),
+                icon: const Icon(Icons.drive_file_move_outline),
+                label: Text(tr('Переместить вправо')),
+              ),
+              OutlinedButton.icon(
+                onPressed: _right.selected.isEmpty || _fileOperationBusy
+                    ? null : () => _copy(_right, _left, move: true),
+                icon: const Icon(Icons.drive_file_move),
+                label: Text(tr('Переместить влево')),
+              ),
+              OutlinedButton.icon(
+                onPressed: _clipboard == null || _fileOperationBusy
+                    ? null : () => _paste(_active == 0 ? _left : _right),
+                icon: const Icon(Icons.content_paste),
+                label: Text(tr('Вставить')),
               ),
               OutlinedButton.icon(
                 onPressed: _left.selected.isEmpty
