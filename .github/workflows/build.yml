@@ -24,7 +24,7 @@ jobs:
         run: |
           dart format lib test
           flutter analyze --no-fatal-infos
-          flutter test
+          flutter test --reporter expanded
       - name: Build Linux
         run: flutter build linux --release
       - name: Package Linux
