@@ -37,7 +37,7 @@ jobs:
           path: FerryPane-linux-x64.tar.gz
       - name: Build Debian installer
         run: |
-          bash tool/build_deb.sh "$(sed -n 's/^version: \([^+]*\).*//p' pubspec.yaml)"
+          bash tool/build_deb.sh "$(awk '/^version:/ {print $2}' pubspec.yaml | cut -d+ -f1)"
           dpkg-deb --field FerryPane-linux-amd64.deb Package Version Architecture
       - uses: actions/upload-artifact@v4
         with:
