@@ -775,27 +775,6 @@ class _FerryHomeState extends State<FerryHome> {
     }
   }
 
-  Future<void> _smsRestoreInfo() async {
-    await showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Восстановление SMS'),
-        content: const Text(
-          'Android разрешает запись в системную базу SMS только '
-          'приложению SMS по умолчанию. FerryPane пока не является '
-          'таким приложением. Восстановление SMS не реализовано, '
-          'чтобы не обещать небезопасную или неработающую операцию.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Понятно'),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _phoneTools() {
     final service = _service;
     final available = service?.connected?.ready == true &&
@@ -825,11 +804,6 @@ class _FerryHomeState extends State<FerryHome> {
             onPressed: available ? _restoreContacts : null,
             icon: const Icon(Icons.contact_phone_outlined, size: 18),
             label: const Text('Восстановить контакты'),
-          ),
-          OutlinedButton.icon(
-            onPressed: available ? _smsRestoreInfo : null,
-            icon: const Icon(Icons.info_outline, size: 18),
-            label: const Text('Восстановить SMS…'),
           ),
         ],
       ),

@@ -24,7 +24,7 @@ One Flutter/Dart peer application runs on every supported OS. Every installation
 
 ## Phone contacts and SMS (experimental)
 
-On the desktop, when connected to Android, the toolbar provides “Бэкап контактов”, “Бэкап SMS”, “Восстановить контакты”, and an informational “Восстановить SMS…” action.
+On the desktop, when connected to Android, the toolbar provides “Бэкап контактов”, “Бэкап SMS”, “Восстановить контакты”, and “Восстановить контакты”.
 
 Contacts are exported as vCard files. SMS are saved as both **JSON** and a standalone, searchable **offline HTML conversation archive** (not MMS/RCS), inside the chosen local PC folder. The PC shows the final saved file paths only after verified transfer and refreshes its file panel. FerryPane on Android previews incoming vCard contacts, then after explicit confirmation adds missing contacts and merges missing phone numbers/email using Android ContactsProvider; it never deletes existing contacts. Photos and rare vCard attributes are not imported yet. SMS restoration is **not implemented** because Android limits writing to the default SMS handler.
 
