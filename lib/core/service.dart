@@ -1132,13 +1132,14 @@ class FerryService extends ChangeNotifier {
       _status(tr('Загрузка завершена и подтверждена получателем'));
       if (_pendingJob != null) await _finishJob();
     } catch (e) {
-      if (_pendingJob != null && !_isInterrupted(peer, e) &&
-          !_cancelRequested && _pendingJob!['paused'] != true) {
-        await _finishJob();
-        rethrow;
-      }
+      // Failure is not success. Never erase the only persisted selection on
+      // an ambiguous socket-close / acknowledgement race. A genuinely
+      // permanent error remains visible and can be retried after correction,
+      // or explicitly cancelled by the owner.
       if (_pendingJob != null && _pendingJob!['paused'] != true) {
-        _status('Связь прервана, задание сохранено для докачки');
+        _status(_isInterrupted(peer, e)
+            ? 'Связь прервана, задание сохранено для докачки'
+            : 'Передача не завершена: $e. Можно продолжить или отменить.');
       }
     } finally {
       _flowAcks.finish();

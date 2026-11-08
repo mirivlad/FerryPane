@@ -139,7 +139,11 @@ void main() {
       await waitUntil(() =>
           a.connected == null && server.connected == null);
       await firstTry;
-      expect(a.hasPendingCopy, isTrue);
+      // On abrupt disconnect, the sender must keep its selection even if a
+      // flow acknowledgement was racing with WebSocket.close().
+      expect(a.hasPendingCopy, isTrue,
+          reason: 'A transport error must not delete the recovery job: '
+              '${a.lastMessage}');
       expect(await File('${bRoot.path}/Documents/first.txt').exists(), isTrue);
 
       // Simulate a full process stop on both ends, rather than only a
