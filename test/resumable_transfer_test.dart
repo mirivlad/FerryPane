@@ -145,6 +145,17 @@ void main() {
           reason: 'A transport error must not delete the recovery job: '
               '${a.lastMessage}');
       expect(await File('${bRoot.path}/Documents/first.txt').exists(), isTrue);
+      // Diagnose whether interruption preserved a durable partial file,
+      // rather than treating a completed retry as proof of actual resume.
+      final stages = await Directory('${bRoot.path}/.ferrypane-resume')
+          .list(recursive: true)
+          .where((entry) => entry is File && entry.path.endsWith('.part'))
+          .cast<File>()
+          .toList();
+      final stageSizes = await Future.wait(stages.map((file) => file.length()));
+      expect(stageSizes.any((length) => length > 0), isTrue,
+          reason: 'Receiver must retain already-written bytes after disconnect; '
+              'staged sizes: $stageSizes, receiver status: ${server.lastMessage}');
 
       // Simulate a full process stop on both ends, rather than only a
       // temporary network interruption. The destination journal and sender's
