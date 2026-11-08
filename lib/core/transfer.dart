@@ -25,6 +25,7 @@ class IncomingTransfer {
   ByteConversionSink? _hasher;
   int _chunkCounter = 0;
   final Map<String, String> _directoryAliases = {};
+  final List<String> savedPaths = [];
 
   String _destinationPath(String remoteRelative) {
     final clean = sanitizeRelative(remoteRelative);
@@ -82,13 +83,18 @@ class IncomingTransfer {
         await _openedFile!.close();
         _openedFile = null;
         await File(_temporaryPath!).rename(_finalPath!);
-        progress('Saved: $_finalPath');
+        savedPaths.add(_finalPath!);
+        progress('Сохранено: ${_finalPath!}');
         _temporaryPath = null;
         _finalPath = null;
         break;
       case 'transfer_end':
         if (_openedFile != null) throw const FormatException('Transfer ended mid-file');
-        progress('Transfer completed');
+        progress(
+          savedPaths.isEmpty
+              ? 'Передача завершена: файлов не получено'
+              : 'Получено ${savedPaths.length} файл(ов). Последний: ${savedPaths.last}',
+        );
         break;
     }
   }

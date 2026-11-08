@@ -41,11 +41,27 @@ class PersonalDataBridge {
     return folder;
   }
 
-  static Future<String> launchContactsImport(String file) async {
+  /// Preview and restore inside FerryPane using ContactsProvider. READ_CONTACTS
+  /// and WRITE_CONTACTS must be granted; nothing is imported during preview.
+  static Future<Map<String, dynamic>> previewContactsImport(String file) async {
     if (!available) throw UnsupportedError('Import requires Android');
-    final result = await _native.invokeMethod<String>(
-      'openContactsImport', {'path': file},
+    final granted = await Permission.contacts.request();
+    if (!granted.isGranted) {
+      throw StateError('Android не разрешил чтение и запись контактов');
+    }
+    final value = await _native.invokeMapMethod<String, dynamic>(
+      'previewContactsImport', {'path': file},
     );
-    return result ?? 'Запущен штатный импорт контактов';
+    if (value == null) throw StateError('Не удалось прочитать vCard');
+    return value;
+  }
+
+  static Future<Map<String, dynamic>> restoreContactsImport(String file) async {
+    if (!available) throw UnsupportedError('Import requires Android');
+    final value = await _native.invokeMapMethod<String, dynamic>(
+      'restoreContactsImport', {'path': file},
+    );
+    if (value == null) throw StateError('Контакты не импортированы');
+    return value;
   }
 }
