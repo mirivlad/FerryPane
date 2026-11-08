@@ -680,6 +680,89 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
         'Скопировано. Выберите каталог назначения.'));
   }
 
+
+  /// Cross-device move: copy, await authenticated transfer completion, verify
+  /// each tree on both endpoints, then delete only the original matching
+  /// the pre-copy SHA-256 tree digest. Failed/partial copies retain originals.
+  Future<void> _moveAcross(BrowserPane from, BrowserPane to,
+      List<String> sourcePaths) async {
+    final service = _service!;
+    if (service.hasPendingCopy || sourcePaths.isEmpty ||
+        sourcePaths.length > 64) {
+      throw StateError('Finish the previous transfer or select up to 64 items');
+    }
+    final destinations = sourcePaths
+        .map((source) => _panePath(to, _basename(from.remote, source)))
+        .toList();
+    for (var i = 0; i < sourcePaths.length; i++) {
+      for (var j = 0; j < sourcePaths.length; j++) {
+        if (i == j) continue;
+        if ((from.remote ? p.posix : p).isWithin(
+            sourcePaths[i], sourcePaths[j])) {
+          throw StateError('Nested selected sources cannot be moved together');
+        }
+      }
+    }
+    if (destinations.map((x) => x.toLowerCase()).toSet().length !=
+        destinations.length) {
+      throw StateError('Selected files contain duplicate names');
+    }
+    // Never permit a partial merge or receiver suffix to masquerade as move.
+    final existing = to.remote
+        ? await service.remoteList(to.location)
+        : await listAt(to.location, '');
+    final names = existing.map((item) => item.name.toLowerCase()).toSet();
+    if (destinations.any((path) =>
+        names.contains(_basename(to.remote, path).toLowerCase()))) {
+      throw StateError('Destination already contains selected names. '
+          'Choose an empty destination folder for a safe move.');
+    }
+
+    final originalDigests = <String, String>{};
+    for (final source in sourcePaths) {
+      originalDigests[source] = from.remote
+          ? await service.remoteTreeDigest([source])
+          : await FileManagerOps.digestLocal([source]);
+    }
+
+    if (from.remote) {
+      await service.downloadAndWait(sourcePaths, to.location);
+    } else {
+      if (!await service.uploadVerified(sourcePaths, to.location)) {
+        throw StateError('Transfer not verified; original files preserved');
+      }
+    }
+
+    // Verify receiver bytes and ensure the original was not modified by
+    // another application during the transfer.
+    for (var i = 0; i < sourcePaths.length; i++) {
+      final source = sourcePaths[i];
+      final target = destinations[i];
+      final expected = originalDigests[source]!;
+      final received = to.remote
+          ? await service.remoteTreeDigest([target])
+          : await FileManagerOps.digestLocal([target]);
+      final current = from.remote
+          ? await service.remoteTreeDigest([source])
+          : await FileManagerOps.digestLocal([source]);
+      if (received != expected || current != expected) {
+        throw StateError('Content changed or destination mismatched; '
+            'original files were preserved');
+      }
+    }
+
+    // Each destructive command independently rechecks the expected digest.
+    for (final source in sourcePaths) {
+      if (from.remote) {
+        await service.remoteFileOp('deleteVerified',
+            path: source, expectedDigest: originalDigests[source]);
+      } else {
+        await FileManagerOps.local('deleteVerified',
+            path: source, expectedDigest: originalDigests[source]);
+      }
+    }
+  }
+
   Future<void> _paste(BrowserPane pane) async {
     final item = _clipboard;
     if (item == null || _fileOperationBusy) return;
@@ -688,14 +771,12 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
       _notice(tr('Устройство изменилось. Скопируйте файлы заново.'));
       return;
     }
-    if (item.cut && item.remote != pane.remote) {
-      _notice(tr('Перемещение между устройствами недоступно без '
-          'подтверждения целостности. Сначала скопируйте файлы.'));
-      return;
-    }
     setState(() => _fileOperationBusy = true);
     try {
-      if (item.remote == pane.remote) {
+      if (item.cut && item.remote != pane.remote) {
+        final source = BrowserPane(remote: item.remote, location: '');
+        await _moveAcross(source, pane, item.paths);
+      } else if (item.remote == pane.remote) {
         for (final source in item.paths) {
           final dest = _panePath(pane, _basename(item.remote, source));
           var conflict = 'keepBoth';
@@ -726,15 +807,14 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
 
   Future<void> _copy(BrowserPane from, BrowserPane to, {bool move = false}) async {
     if (from.selected.isEmpty || _fileOperationBusy) return;
-    if (move && from.remote != to.remote) {
-      _notice(tr('Перемещение между устройствами недоступно без '
-          'подтверждения целостности. Сначала скопируйте файлы.'));
-      return;
-    }
     setState(() => _fileOperationBusy = true);
     try {
       final selected = from.selected.toList();
-      if (from.remote == to.remote) {
+      if (move && from.remote != to.remote) {
+        await _moveAcross(from, to, selected);
+        await _load(to);
+        await _load(from);
+      } else if (from.remote == to.remote) {
         for (final source in selected) {
           final dest = _panePath(to, _basename(from.remote, source));
           var conflict = 'keepBoth';
@@ -1514,15 +1594,13 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
                     : tr('Из правой в левую ({count})', {'count': _right.selected.length})),
               ),
               OutlinedButton.icon(
-                onPressed: _left.remote != _right.remote ||
-                        _left.selected.isEmpty || _fileOperationBusy
+                onPressed: _left.selected.isEmpty || _fileOperationBusy
                     ? null : () => _copy(_left, _right, move: true),
                 icon: const Icon(Icons.drive_file_move_outline),
                 label: Text(tr('Переместить вправо')),
               ),
               OutlinedButton.icon(
-                onPressed: _left.remote != _right.remote ||
-                        _right.selected.isEmpty || _fileOperationBusy
+                onPressed: _right.selected.isEmpty || _fileOperationBusy
                     ? null : () => _copy(_right, _left, move: true),
                 icon: const Icon(Icons.drive_file_move),
                 label: Text(tr('Переместить влево')),

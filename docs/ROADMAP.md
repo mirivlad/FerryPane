@@ -37,7 +37,7 @@ Preview.2 includes operation ID matching, transfer-slot reservation for Android 
 ## Deferred product work
 
 - WAN relay/hub over HTTPS/WSS: separate architectural and possibly commercial decision. Client source remains GPL.
-- Directory synchronization, multi-peer sessions, drag-and-drop and directory comparisons. Cross-device move awaits a verified source-deletion protocol.
+- Directory synchronization, multi-peer sessions, drag-and-drop and directory comparisons. Cross-device move now uses verified copy and conditional source deletion; future work includes batch conflict UX.
 - File previews, metadata preservation, better Android scoped-storage/SAF integration.
 - Android foreground-service startup/reboot policy and managed backup jobs.
 - macOS/iOS clients.

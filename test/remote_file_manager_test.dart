@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:ferrypane/core/secure_peer.dart';
+import 'package:ferrypane/core/file_operations.dart';
 import 'package:ferrypane/core/service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
@@ -66,13 +67,27 @@ void main() {
       expect(await File(p.join(bRoot.path, 'created',
           'renamed.txt')).exists(), isFalse);
 
+      final expectedDigest =
+          await a.remoteTreeDigest(['created/report.txt']);
+      expect(expectedDigest,
+          await FileManagerOps.digestLocal([
+            p.join(bRoot.path, 'created', 'report.txt'),
+          ]));
+      await File(p.join(bRoot.path, 'created', 'report.txt'))
+          .writeAsString('changed');
+      await expectLater(
+        a.remoteFileOp('deleteVerified',
+            path: 'created/report.txt', expectedDigest: expectedDigest),
+        throwsA(isA<StateError>()),
+      );
+
       await b.setPeerAccess(read: true, write: false);
       await expectLater(
         a.remoteFileOp('delete', path: 'created/report.txt'),
         throwsA(isA<StateError>()),
       );
       expect(await File(p.join(bRoot.path, 'created',
-          'report.txt')).readAsString(), 'hello');
+          'report.txt')).readAsString(), 'changed');
     } finally {
       a.dispose();
       b.dispose();

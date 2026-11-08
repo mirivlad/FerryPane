@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:crypto/crypto.dart' as crypto;
@@ -13,12 +14,12 @@ class FileOperationResult {
 /// Common local and encrypted-peer operations. No silent overwrite, root
 /// deletion, path traversal or symlink traversal.
 class FileManagerOps {
-  static const actions = {'mkdir', 'rename', 'delete', 'move', 'copy'};
+  static const actions = {'mkdir', 'rename', 'delete', 'deleteVerified', 'move', 'copy'};
   static const conflicts = {'skip', 'keepBoth', 'replace'};
 
   static Future<FileOperationResult> remote(String root, String action,
       {required String path, String? target,
-      String conflict = 'keepBoth'}) async {
+      String conflict = 'keepBoth', String? expectedDigest}) async {
     _validateRequest(action, conflict);
     final source = sanitizeRelative(path);
     if (source.isEmpty) throw const FormatException('Root mutation denied');
@@ -30,7 +31,8 @@ class FileManagerOps {
       validateDestinationPath(rel, windows: Platform.isWindows);
       destination = containedPath(root, rel);
     }
-    final result = await _perform(action, absolute, destination, conflict);
+    final result = await _perform(action, absolute, destination, conflict,
+        expectedDigest: expectedDigest);
     return FileOperationResult(
         p.relative(result.path, from: p.normalize(p.absolute(root)))
             .replaceAll('\\', '/'),
@@ -39,10 +41,11 @@ class FileManagerOps {
 
   static Future<FileOperationResult> local(String action,
       {required String path, String? target,
-      String conflict = 'keepBoth'}) async {
+      String conflict = 'keepBoth', String? expectedDigest}) async {
     _validateRequest(action, conflict);
     return _perform(action, _localPath(path),
-        target == null ? null : _localPath(target), conflict);
+        target == null ? null : _localPath(target), conflict,
+        expectedDigest: expectedDigest);
   }
 
   static void _validateRequest(String action, String conflict) {
@@ -63,7 +66,8 @@ class FileManagerOps {
   }
 
   static Future<FileOperationResult> _perform(
-      String action, String source, String? target, String conflict) async {
+      String action, String source, String? target, String conflict,
+      {String? expectedDigest}) async {
     if (action == 'mkdir') {
       if (await _exists(source)) {
         throw FileSystemException('Directory already exists', source);
@@ -80,7 +84,16 @@ class FileManagerOps {
         type != FileSystemEntityType.directory) {
       throw FileSystemException('File not found or unsafe symlink', source);
     }
-    if (action == 'delete') {
+    if (action == 'delete' || action == 'deleteVerified') {
+      if (action == 'deleteVerified') {
+        if (expectedDigest == null ||
+            !RegExp(r'^[a-f0-9]{64}$').hasMatch(expectedDigest)) {
+          throw const FormatException('Missing original checksum for move');
+        }
+        if (await _digestPaths([source]) != expectedDigest) {
+          throw StateError('Source changed since the verified transfer');
+        }
+      }
       await _remove(source);
       return FileOperationResult(source);
     }
@@ -244,6 +257,70 @@ class FileManagerOps {
     }
     await walk(initial, 0);
     return results;
+  }
+
+
+  /// Snapshot each selected root by deterministic relative names, sizes and
+  /// SHA-256 file hashes. A move is allowed to delete only unchanged sources
+  /// whose complete destination tree matches this snapshot.
+  static Future<String> digestLocal(List<String> paths) async =>
+      _digestPaths(paths.map(_localPath).toList());
+
+  static Future<String> digestRemote(String root, List<String> paths) async {
+    if (paths.isEmpty || paths.length > 64) {
+      throw const FormatException('Invalid manifest selection count');
+    }
+    final absolute = <String>[];
+    for (final path in paths) {
+      final relative = sanitizeRelative(path);
+      if (relative.isEmpty) {
+        throw const FormatException('Shared root cannot be moved');
+      }
+      absolute.add(containedPath(root, relative));
+    }
+    return _digestPaths(absolute);
+  }
+
+  static Future<String> _digestPaths(List<String> paths) async {
+    if (paths.isEmpty || paths.length > 64) {
+      throw const FormatException('Invalid manifest selection count');
+    }
+    final records = <String>[];
+    var count = 0;
+    Future<void> visit(String absolute, String relative, int depth) async {
+      if (++count > 100000 || depth > 64) {
+        throw const FormatException('Selection exceeds verification limits');
+      }
+      final type = await FileSystemEntity.type(absolute, followLinks: false);
+      if (type == FileSystemEntityType.file) {
+        final file = File(absolute);
+        final before = await file.stat();
+        final hash = (await crypto.sha256.bind(file.openRead()).first).toString();
+        final after = await file.stat();
+        if (before.size != after.size || before.modified != after.modified) {
+          throw FileSystemException('Source changed while hashing', absolute);
+        }
+        records.add('F|$relative|$hash');
+      } else if (type == FileSystemEntityType.directory) {
+        records.add('D|$relative');
+        final children = await Directory(absolute).list(followLinks: false)
+            .toList();
+        children.sort((a,b) => p.basename(a.path).compareTo(p.basename(b.path)));
+        for (final child in children) {
+          final name = p.basename(child.path);
+          if (_internal(name)) {
+            throw FileSystemException('Move contains transfer metadata', child.path);
+          }
+          await visit(child.path, '$relative/$name', depth + 1);
+        }
+      } else {
+        throw FileSystemException('Move contains symlink or missing item', absolute);
+      }
+    }
+    for (final path in paths) {
+      await visit(path, p.basename(path), 0);
+    }
+    return crypto.sha256.convert(utf8.encode(records.join('\n'))).toString();
   }
 
   static bool _internal(String name) =>

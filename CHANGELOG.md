@@ -8,7 +8,7 @@ From 0.2.0 releases are published without Preview branding. No independent secur
 - Handle name conflicts with explicit skip/keep both/replace policies. Stage and SHA-256-verify copies before committing; no implicit overwrite.
 - Sort by name, size, modification date or file type, inspect basic properties and search nested folders with bounded traversal.
 - Encrypted protocol v5 adds permission-checked file operation and search RPCs. Remote filesystem changes require per-peer write access. Older clients are intentionally incompatible; update both endpoints.
-- Cross-device moves remain a separate copy/verify/delete workflow and are not exposed as an unsafe one-click operation.
+- Cross-device moves use complete transfer receipts and SHA-256 tree comparisons before conditional source deletion. Existing destination names and changed sources are rejected; interrupted transfers retain their originals.
 - Normal non-prerelease tag and installer/APK artifacts; Android device-specific background limitations still apply.
 
 ## 0.1.8 Preview — opt-in Android foreground recovery
