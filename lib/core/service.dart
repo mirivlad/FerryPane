@@ -1373,6 +1373,8 @@ class FerryService extends ChangeNotifier {
       }
       switch (type) {
         case 'file_op':
+          // Refresh revocations before checking grants (including Android headless).
+          await identity.prefs.reload();
           final operation = msg['action'] as String;
           final conflict = msg['conflict'] as String? ?? 'keepBoth';
           final destructive = const {
