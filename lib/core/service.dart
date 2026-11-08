@@ -700,10 +700,19 @@ class FerryService extends ChangeNotifier {
                   throw StateError('Получен файл неподходящего формата: $file');
                 }
                 final files = <String>[file];
+                String? htmlFailure;
                 if (_personalBackupKind == 'sms') {
-                  files.add(await SmsArchive.createViewer(File(file)));
+                  try {
+                    files.add(await SmsArchive.createViewer(File(file)));
+                  } catch (e) {
+                    // An HTML rendering failure must not conceal or discard a
+                    // fully verified JSON backup that is already on disk.
+                    htmlFailure = '$e';
+                  }
                 }
-                _status('Готово. Резервная копия сохранена: ${files.join(' и ')}');
+                _status(htmlFailure == null
+                    ? 'Готово. Резервная копия сохранена: ${files.join(' и ')}'
+                    : 'SMS JSON сохранён: $file. HTML не создан: $htmlFailure');
                 if (pending != null && !pending.isCompleted) pending.complete(files);
               } catch (e) {
                 _status('Ошибка обработки резервной копии: $e');
