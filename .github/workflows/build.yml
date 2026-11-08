@@ -113,6 +113,20 @@ jobs:
         with:
           channel: stable
           cache: true
+      - name: Prefer verified Maven mirror for Kotlin in included Gradle builds
+        run: |
+          mkdir -p "$HOME/.gradle/init.d"
+          printf '%s\n' \
+            'gradle.beforeProject { project ->' \
+            '  project.repositories.maven {' \
+            '    url "https://maven.aliyun.com/repository/central"' \
+            '    content { includeGroupByRegex("org\\.jetbrains\\.kotlin.*") }' \
+            '  }' \
+            '  project.buildscript.repositories.maven {' \
+            '    url "https://maven.aliyun.com/repository/central"' \
+            '    content { includeGroupByRegex("org\\.jetbrains\\.kotlin.*") }' \
+            '  }' \
+            '}' > "$HOME/.gradle/init.d/ferrypane-kotlin.gradle"
       - name: Prepare Flutter platforms
         run: bash tool/prepare_platforms.sh
       # Untagged builds (PR/main) validate code with debug signing only.
