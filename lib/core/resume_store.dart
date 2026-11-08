@@ -75,11 +75,18 @@ class ResumeStore {
       'aliases': <String, String>{},
       'files': <String, dynamic>{},
     };
-    if (await manifestFile.exists()) {
-      if (await manifestFile.length() > maxManifestBytes) {
-        throw const FormatException('Resume metadata is too large');
+    // A previous Windows-compatible metadata replacement may have been
+    // interrupted after moving the old file to .bak; read that fallback
+    // rather than silently allocating new filenames or losing partial data.
+    final fallback = File(p.join(cache.path, 'manifest.bak'));
+    final source = await manifestFile.exists() ? manifestFile : fallback;
+    if (await source.exists()) {
+      if (FileSystemEntity.typeSync(source.path, followLinks: false) ==
+          FileSystemEntityType.link ||
+          await source.length() > maxManifestBytes) {
+        throw const FormatException('Unsafe or oversized resume metadata');
       }
-      final decoded = jsonDecode(await manifestFile.readAsString());
+      final decoded = jsonDecode(await source.readAsString());
       if (decoded is! Map) throw const FormatException('Invalid resume metadata');
       state = Map<String, dynamic>.from(decoded);
       if (state['version'] != 1 || state['peer'] != senderIdentity ||
@@ -186,13 +193,25 @@ class ResumeStore {
       throw const FileSystemException('Resume temporary metadata is a link');
     }
     await temp.writeAsString(encoded, flush: true);
-    // Windows may reject replacing a file with rename; the metadata is
-    // reconstructible from existing files, and we never delete user files.
+    // POSIX rename is atomic. On Windows rename-over-existing can fail,
+    // so keep a recoverable backup instead of deleting the only manifest.
     try {
       await temp.rename(manifestFile.path);
     } on FileSystemException {
-      if (await manifestFile.exists()) await manifestFile.delete();
-      await temp.rename(manifestFile.path);
+      final backup = File(p.join(cache.path, 'manifest.bak'));
+      if (await backup.exists()) await backup.delete();
+      if (await manifestFile.exists()) {
+        await manifestFile.rename(backup.path);
+      }
+      try {
+        await temp.rename(manifestFile.path);
+      } catch (_) {
+        if (!await manifestFile.exists() && await backup.exists()) {
+          await backup.rename(manifestFile.path);
+        }
+        rethrow;
+      }
+      if (await backup.exists()) await backup.delete();
     }
   }
 }

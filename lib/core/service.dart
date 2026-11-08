@@ -206,6 +206,29 @@ class FerryService extends ChangeNotifier {
     }
   }
 
+  static bool _isInterrupted(SecurePeer peer, Object error) {
+    if (!peer.ready || peer.socket.readyState != WebSocket.open ||
+        error is SocketException || error is WebSocketException) {
+      return true;
+    }
+    final reason = '$error';
+    return reason.contains('Disconnected:') ||
+        reason.contains('StreamSink is closed') ||
+        reason.contains('Peer closed the connection');
+  }
+
+  void _setTransferCompletion() {
+    final completed = Completer<void>();
+    // Disconnection may occur while source hashing/chunks are in flight,
+    // before the sender awaits its final receipt. Attach an observer now,
+    // preventing an unhandled asynchronous error in that legitimate case.
+    unawaited(completed.future.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {},
+    ));
+    _transferComplete = completed;
+  }
+
   Future<ResumeReply> _requestResume(
     SecurePeer peer, String transferId, String path, int size, String digest, {
     bool reset = false,
@@ -1028,7 +1051,7 @@ class FerryService extends ChangeNotifier {
     final transferId = _newTransferId();
     _sending = true;
     _outgoingTransferId = transferId;
-    _transferComplete = Completer<void>();
+    _setTransferCompletion();
     _flowAcks.begin(transferId);
     try {
       await peer.sendJson({
@@ -1083,7 +1106,7 @@ class FerryService extends ChangeNotifier {
     _sending = true;
     _cancelRequested = false;
     _outgoingTransferId = transferId;
-    _transferComplete = Completer<void>();
+    _setTransferCompletion();
     _flowAcks.begin(transferId);
     try {
       await peer.sendJson({
@@ -1109,8 +1132,8 @@ class FerryService extends ChangeNotifier {
       _status(tr('Загрузка завершена и подтверждена получателем'));
       if (_pendingJob != null) await _finishJob();
     } catch (e) {
-      if (_pendingJob != null && peer.ready && !_cancelRequested &&
-          _pendingJob!['paused'] != true) {
+      if (_pendingJob != null && !_isInterrupted(peer, e) &&
+          !_cancelRequested && _pendingJob!['paused'] != true) {
         await _finishJob();
         rethrow;
       }
@@ -1485,7 +1508,7 @@ class FerryService extends ChangeNotifier {
       // export. A second request cannot race the first while it prepares data.
       _sending = true;
       _outgoingTransferId = transferId;
-      _transferComplete = Completer<void>();
+      _setTransferCompletion();
       _flowAcks.begin(transferId);
       tempFile = await PersonalDataBridge.makeBackup(kind);
       await peer.sendJson({
@@ -1579,7 +1602,7 @@ class FerryService extends ChangeNotifier {
     _sending = true;
     _cancelRequested = false;
     _outgoingTransferId = transferId;
-    _transferComplete = Completer<void>();
+    _setTransferCompletion();
     _flowAcks.begin(transferId);
     try {
       _status(tr('Отправлено {count} объектов', {'count': selected.length}));

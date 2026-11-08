@@ -347,8 +347,12 @@ class SecurePeer {
         socket.add(box.concatenation());
         completer.complete();
       } catch (e, s) {
-        completer.completeError(e, s);
-        rethrow;
+        // _sendTail is an internal serialization barrier with no error
+        // listener of its own. Propagate the error to the actual caller,
+        // but never poison that barrier or generate an uncaught secondary
+        // asynchronous error when a socket closes during transfer.
+        if (!completer.isCompleted) completer.complete();
+        Error.throwWithStackTrace(e, s);
       }
     }();
   }

@@ -365,11 +365,18 @@ class IncomingTransfer {
     _chunkCounter++;
     onProgress?.call(_currentRelative!, _received, _expected);
     if (_chunkCounter % 8 == 0) {
-      await peer.sendJson({
-        'type': 'flow_ack',
-        'transferId': transferId,
-        'chunks': _chunkCounter,
-      });
+      try {
+        await peer.sendJson({
+          'type': 'flow_ack',
+          'transferId': transferId,
+          'chunks': _chunkCounter,
+        });
+      } catch (_) {
+        // This file chunk was already written. Failure to acknowledge a
+        // disconnected sender is a network interruption, NOT a reason to
+        // delete the staged bytes. Sender times out/reconnects and
+        // independently verifies the retained prefix before using it.
+      }
     }
   }
 
