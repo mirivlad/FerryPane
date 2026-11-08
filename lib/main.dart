@@ -284,9 +284,14 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
             ? await Permission.contacts.request()
             : await Permission.sms.request();
         if (!permission.isGranted) {
+          if (permission.isPermanentlyDenied) {
+            await openAppSettings();
+          }
           _notice(tr('Android не выдал разрешение на чтение {kind}. Для SMS действуют особые ограничения Android.', {
-          'kind': kind == 'contacts' ? tr('контактов') : 'SMS',
-        }));
+            'kind': kind == 'contacts' ? tr('контактов') : 'SMS',
+          }));
+          await _refreshSystemBackupPermissions();
+          if (mounted) updateDialog(() {});
           return;
         }
       }
@@ -609,6 +614,14 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
                       onChanged: (allowed) => _setBackupAccess(
                         service, 'sms', allowed, refresh,
                       ),
+                    ),
+                    TextButton.icon(
+                      onPressed: () async {
+                        await _refreshSystemBackupPermissions();
+                        if (mounted) refresh(() {});
+                      },
+                      icon: const Icon(Icons.verified_user_outlined, size: 18),
+                      label: Text(tr('Проверить разрешения')),
                     ),
                   ],
                 ),

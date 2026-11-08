@@ -2,9 +2,22 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:ferrypane/core/sms_archive.dart';
+import 'package:ferrypane/core/localization.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('SMS archive viewer translates its offline UI independently', () {
+    AppLanguage.choice.value = 'en';
+    final english = SmsArchive.template('W10=');
+    expect(english, contains('SMS archive'));
+    expect(english, contains('Search by name, number or text'));
+    expect(english, contains('Select a conversation'));
+    AppLanguage.choice.value = 'ru';
+    final russian = SmsArchive.template('W10=');
+    expect(russian, contains('Архив SMS'));
+    expect(russian, contains('Поиск по имени, номеру, тексту'));
+  });
+
   test('SMS export produces standalone offline HTML without raw HTML injection',
       () async {
     final folder = await Directory.systemTemp.createTemp('ferrypane_sms_');
