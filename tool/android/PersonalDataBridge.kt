@@ -22,6 +22,15 @@ import java.util.UUID
  * Exports are private temporary files, never part of the shared filesystem.
  */
 class PersonalDataBridge(private val activity: FlutterActivity) {
+    fun backupPermissionStatus(): Map<String, Boolean> = mapOf(
+        "contacts" to (activity.checkSelfPermission(
+            Manifest.permission.READ_CONTACTS
+        ) == PackageManager.PERMISSION_GRANTED),
+        "sms" to (activity.checkSelfPermission(
+            Manifest.permission.READ_SMS
+        ) == PackageManager.PERMISSION_GRANTED)
+    )
+
     private fun verifyPermission(permission: String) {
         if (activity.checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
             throw SecurityException("Не выдано системное разрешение $permission")

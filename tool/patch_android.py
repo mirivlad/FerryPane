@@ -81,6 +81,9 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "ferrypane/personal")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
+                    "backupPermissionStatus" -> {
+                        result.success(personalData.backupPermissionStatus())
+                    }
                     "exportContacts", "exportSms", "prepareContactsImport",
                     "previewContactsImport", "restoreContactsImport" -> {
                         executor.execute {

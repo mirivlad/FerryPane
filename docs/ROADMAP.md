@@ -1,74 +1,48 @@
-# FerryPane development roadmap
+# FerryPane roadmap
 
-Status: proposed execution plan. The **first usable release** means that all LAN device pairings can transfer files; intermediate milestones are for incremental testing, not promises of release readiness.
+**Current state: v0.1.5 Preview (November 2026).** The GitHub release artifacts are useful for LAN file transfers, but security-sensitive and Android recovery functions still need real-device validation. Items below distinguish implemented work from planned work.
 
-## Milestone 0 — foundation
+## Implemented in preview releases
 
-- Create open-source licensing decision for *client applications* and a separate statement that a hypothetical relay is out of scope.
-- Set up the Flutter/Dart codebase, platform toolchains, unit-test projects, and GitHub Actions for Linux/Windows and Android APK builds.
-- Define protocol v1 frames, version/capability negotiation, schema and cross-language test vectors.
-- Define identity, mutual verification, pairing/revocation, exported-root permissions, and reliable error handling.
-- Implement a headless protocol/transfer test harness before polishing UIs.
+- [x] Shared Flutter/Dart client for Windows, Linux and Android.
+- [x] Peer discovery on private IPv4 local interfaces, direct IP fallback and VPN-aware Android network probing.
+- [x] First pairing with human-verifiable six-digit code, persistent trust identity and encrypted application payload.
+- [x] Two-panel file manager, navigation with `..`, independent multi-selection, Select all, per-panel copy directions and Windows volume selector.
+- [x] Continuous, bounded, SHA-256-verified streaming transfer of files and nested folders.
+- [x] User-selected shared export directory (desktop native folder picker).
+- [x] Android contacts export to vCard and SMS export to JSON + standalone offline HTML viewer (subject to Android permissions).
+- [x] In-app contact import/merge on Android after explicit preview/approval (common fields only; real-device acceptance still pending).
+- [x] Persistent Android APK signing identity for updates since v0.1.2.
+- [x] Russian/English GUI with System language selection.
+- [x] Windows portable ZIP and EXE installer; Linux TAR.GZ and DEB installer; Android APK.
+- [x] Unit/integration CI for Linux and platform build checks; initial peer upload/download regression tests.
 
-**Acceptance:** Both language implementations parse shared conformance fixtures; CI can build their initial skeletons.
+## Near-term priorities
 
-## Milestone 1 — desktop ↔ desktop vertical slice
+1. **Device acceptance:** test Windows 10/11, Debian/Ubuntu, common Android vendors with and without VPN, Wi-Fi hotspot, mixed file trees and real permissions (including automatically revoked Android grants).
+2. **Reliable Android background service:** explicit, opt-in foreground notification/service and realistic screen-off/process-restart behavior for a phone paired in advance. Do not promise recovery after shutdown, new pairing on a broken screen or override of OS security.
+3. **Contact import quality:** test vCard 2.1/3.0/4.0, country codes, multiple accounts and contact properties; avoid incorrect merges and import duplicates; offer clearer dry-run details and selective import.
+4. **Transfer UX:** progress per file, clear error recovery, interruption/retry, cancellation, speed indicators, and larger batch benchmark suite (large files and 10k/100k tiny files).
+5. **Security engineering:** fuzz filesystem paths, protocol versioning/capabilities, independent cryptographic review and secure storage for identity keys.
+6. **Localization quality:** review translations with native speakers, add translation regression checks and optionally more languages.
+7. **Documentation and website:** after a tested release, publish the project page/announcement on mirv.top and a Telegram-channel post. Do not claim previews are audited or fully background-capable.
 
-- Shared Flutter/Dart peer engine, local-filesystem adapter, LAN listener and connector.
-- mDNS announcement/discovery + manual IP fallback.
-- Pair two peers and connect with authenticated, encrypted sessions.
-- Implement root listing, directory listing and stat.
-- Implement one-file download/upload, then recursive directory transfers using a streaming batch.
-- Show queue, progress, cancel, conflicts, and per-file failures.
-- Flutter desktop two-pane UI; either pane can point to local or remote storage.
+## Deferred product work
 
-**Acceptance:** Win↔Win, Linux↔Linux, Win↔Linux work locally for files and nested trees; no cloud required.
+- WAN relay/hub over HTTPS/WSS: separate architectural and possibly commercial decision. Client source remains GPL.
+- Directory synchronization, multi-peer sessions, drag-and-drop, delete/rename/move and comparisons.
+- File previews, metadata preservation, better Android scoped-storage/SAF integration.
+- Android foreground-service startup/reboot policy and managed backup jobs.
+- macOS/iOS clients.
+- SMS restoration: **explicitly not planned for this stage**. Export to searchable offline HTML is the desired workflow.
 
-## Milestone 2 — desktop ↔ Android
+## Release criteria
 
-- Android Flutter peer core using the same protocol implementation as desktop.
-- Android storage adapter supporting only user/OS-authorized files and directories.
-- Permission-onboarding and service lifecycle for active transfers.
-- First Android UI: available devices, pair/revoke, local files and exported roots, connection/transfer status.
-- Browse remote Android folders from Avalonia and copy recursively in both directions.
-- Test with device providing a Wi-Fi hotspot (no router, no Internet).
+- Automated Flutter/Dart tests and all three target builds pass.
+- Tagged release publishes and verifies all **five** artifacts: Windows ZIP+EXE, Linux TAR.GZ+DEB, signed Android APK.
+- Smoke test installing/updating Android without erasing paired-device identity and with the new Android system-permission status accurately reflected.
+- Verify file manager reveal on Windows/Linux, dismissible notifications and RU/EN labels on both desktop and Android.
+- Validate archive creation, open SMS HTML with networking disabled, and round-trip contacts on a spare Android phone.
+- Clear release notes honestly distinguishing tested behavior from limitations.
 
-**Acceptance:** Windows↔Android and Linux↔Android copying whole folder trees works without per-file selection or manual server configuration.
-
-## Milestone 3 — Android ↔ Android and first complete mobile file manager
-
-- Android UI: browse local and remote files, breadcrumbs, sorting, search where supported, multiselect and select-all.
-- Touch workflow to choose files **or entire folders** and then select destination ("Copy to…", local or remote).
-- Android peer can initiate and receive transfers; no desktop is required.
-- Tablet adaptive two-pane UI; phone single-pane navigation.
-- System share integration may be added, but the primary interaction must be in the file manager.
-- Validate screen-off behavior, user-visible transfer notifications, and current Android foreground service restrictions.
-
-**Acceptance:** Two Android phones (or phone and tablet) can each initiate browse/copy/send/receive in LAN/hotspot mode; both directions work.
-
-## Milestone 4 — quality bar for 0.1.0
-
-- Repeatable benchmark: 2 GB file; 10k tiny files; 100k tiny files; mixed directories.
-- Reliability matrix: unplug Wi-Fi, process restart, full disk, file deleted during transfer, denied permission, conflicting names, Unicode/path-edge cases.
-- Cancellation, restart recovery, resume and integrity verification.
-- Security tests for traversal, symlink escapes, authentication failures and permission boundaries.
-- User-ready builds: Windows package, Linux distributable, Android APK via GitHub Releases.
-- Russian/English localization for primary interactions, onboarding documentation and screenshots.
-- Release only after the above supported LAN pairings are verified.
-
-## Deferred, not forgotten
-
-- Remote relay/hub over HTTPS/WSS 443 (possible independent commercial offering; no commitment on implementation or license).
-- Multi-hop remote-to-remote copies when the controller is a third peer (may require explicit relay through the controller unless separately designed).
-- Android↔iOS, macOS, headless NAS mode, synchronization, backup policies.
-- Thumbnails, previews, advanced filters and file comparisons.
-
-## Implementation priorities
-
-1. Correct protocol and filesystem safety.
-2. Prove desktop↔desktop with real bytes.
-3. Prove desktop↔Android using exactly the same wire contract.
-4. Deliver fully capable Android UI and Android↔Android.
-5. Polish, performance test and ship.
-
-An intermediate branch passing unit tests does **not** count as a completed deliverable or a working mobile release.
+See [README](../README.md) and [architecture](ARCHITECTURE.md).

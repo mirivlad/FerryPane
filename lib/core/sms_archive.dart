@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import 'localization.dart';
+
 /// Builds a single, offline, searchable SMS archive. Untrusted message text
 /// never becomes markup or JavaScript; it is encoded into a base64 payload
 /// and displayed exclusively with DOM textContent.
@@ -40,8 +42,32 @@ class SmsArchive {
     throw const FileSystemException('Не удалось выбрать имя SMS-архива');
   }
 
-  static String template(String payload) =>
-      _html.replaceAll('FERRYPANE_BASE64_DATA', payload);
+  static String template(String payload) {
+    var html = _html.replaceAll('FERRYPANE_BASE64_DATA', payload);
+    if (AppLanguage.active == 'en') {
+      for (final label in _viewerEnglish.entries) {
+        html = html.replaceAll(label.key, label.value);
+      }
+    }
+    return html;
+  }
+
+  static const Map<String, String> _viewerEnglish = {
+    'Архив SMS': 'SMS archive',
+    'Локальный файл': 'Local file',
+    'Поиск по имени, номеру, тексту': 'Search by name, number or text',
+    'Поиск…': 'Search…',
+    'Выберите переписку': 'Select a conversation',
+    'Все данные доступны без интернета.': 'All messages are available offline.',
+    ' сообщений · ': ' messages · ',
+    'дата неизвестна': 'unknown date',
+    'Дата неизвестна': 'Date unknown',
+    'Неизвестный номер': 'Unknown number',
+    'Показать ещё (': 'Show more (',
+    ' · Отправлено': ' · Sent',
+    ' · Получено': ' · Received',
+    'Ничего не найдено': 'No matches found',
+  };
 
   static const String _html = r'''<!doctype html>
 <html lang="ru">

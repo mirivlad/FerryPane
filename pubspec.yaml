@@ -1,13 +1,15 @@
 name: ferrypane
 description: Local-first peer-to-peer file manager for Windows, Linux and Android.
 publish_to: none
-version: 0.1.4+5
+version: 0.1.5+6
 
 environment:
   sdk: '>=3.5.0 <4.0.0'
 
 dependencies:
   flutter:
+    sdk: flutter
+  flutter_localizations:
     sdk: flutter
   cryptography: ^2.7.0
   crypto: ^3.0.3

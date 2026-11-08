@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 import 'files.dart';
 import 'flow_acknowledgements.dart';
 import 'lan_networks.dart';
+import 'localization.dart';
 import 'native_lan.dart';
 import 'personal_data.dart';
 import 'secure_peer.dart';
@@ -61,8 +62,8 @@ class FerryService extends ChangeNotifier {
   bool _sending = false;
   bool _discardingTransfer = false;
   String exportRoot;
-  String lastMessage = 'Ready';
-  String connectionStatus = 'Not connected';
+  String lastMessage = tr('Готово');
+  String connectionStatus = tr('Соединение закрыто');
   bool broadcasting = false;
   final Map<String, NearbyPeer> nearby = {};
 
@@ -105,12 +106,12 @@ class FerryService extends ChangeNotifier {
           final socket = await WebSocketTransformer.upgrade(request);
           _attach(socket, false, request.connectionInfo?.remoteAddress.address);
         } catch (e) {
-          _status('Incoming connection rejected: $e');
+          _status(tr('Входящее подключение отклонено: {error}', {'error': e}));
         }
       });
-      _status('Sharing available on port ${_http!.port}');
+      _status(tr('Сервис доступен на порту {port}', {'port': _http!.port}));
     } catch (e) {
-      _status('Could not listen on port $ferryPort: $e');
+      _status(tr('Ошибка открытия порта {port}: {error}', {'port': ferryPort, 'error': e}));
     }
     // Previously paired devices remain selectable when broadcast discovery
     // is blocked, as can happen on some Windows firewall/Wi-Fi profiles.
@@ -263,7 +264,7 @@ class FerryService extends ChangeNotifier {
         }
       }
     } catch (e) {
-      _status('Поиск в локальных сетях: $e');
+      _status(tr('Поиск в локальных сетях: {error}', {'error': e}));
     } finally {
       _networkScanActive = false;
       _notify();
@@ -273,7 +274,7 @@ class FerryService extends ChangeNotifier {
   /// Search every eligible local IPv4 interface; never probe public networks.
   void scanNow() {
     if (_udp == null) {
-      _status('Автопоиск недоступен. Подключитесь вручную по IP.');
+      _status(tr('Автопоиск недоступен. Подключитесь вручную по IP.'));
       return;
     }
     unawaited(_scanAllNetworks());
@@ -283,7 +284,7 @@ class FerryService extends ChangeNotifier {
   Future<void> connect(String ipOrHost) async {
     final host = ipOrHost.trim();
     if (host.isEmpty) throw const FormatException('Enter device IP address');
-    connectionStatus = 'Connecting to $host';
+    connectionStatus = tr('Подключение к {device}', {'device': host});
     _notify();
     final uri = Uri.parse(host.contains('://') ? host : 'ws://$host:$ferryPort');
     if (Platform.isAndroid) {
@@ -333,13 +334,13 @@ class FerryService extends ChangeNotifier {
           _personalBackupKind = null;
           _outgoingTransferId = null;
           connected = null;
-          connectionStatus = 'Disconnected';
-          _status('Disconnected: $reason');
+          connectionStatus = tr('Соединение закрыто');
+          _status(tr('Соединение разорвано: {reason}', {'reason': reason}));
         }
       },
       onReady: () {
         if (connected == peer) {
-          connectionStatus = 'Connected: ${peer.remoteName}';
+          connectionStatus = tr('Подключено к {device}', {'device': peer.remoteName});
           if (remoteAddress != null && remoteAddress.isNotEmpty) {
             nearby[peer.remoteKey] = NearbyPeer(
               peer.remoteName, remoteAddress, peer.remoteKey, DateTime.now(),
@@ -348,12 +349,12 @@ class FerryService extends ChangeNotifier {
               'known.host.${peer.remoteKey}', remoteAddress,
             ));
           }
-          _status('Можно передавать файлы');
+          _status(tr('Можно передавать файлы'));
         }
       },
     );
     connected = peer;
-    connectionStatus = 'Pairing…';
+    connectionStatus = tr('Сопряжение…');
     _notify();
     unawaited(peer.run());
   }
@@ -401,7 +402,7 @@ class FerryService extends ChangeNotifier {
     }
     exportRoot = p.normalize(p.absolute(path));
     await identity.prefs.setString('ferrypane.export.root', exportRoot);
-    _status('Export root: $exportRoot');
+    _status(tr('Корневая общая папка: {path}', {'path': exportRoot}));
   }
 
   Future<List<FileEntry>> remoteList(String path) async {
@@ -433,7 +434,7 @@ class FerryService extends ChangeNotifier {
         'transferId': transferId,
         'paths': remotePaths.map(sanitizeRelative).toList(),
       });
-      _status('Downloading ${remotePaths.length} selections');
+      _status(tr('Загрузка {count} объектов', {'count': remotePaths.length}));
     } catch (_) {
       await _incoming?.abort();
       _incoming = null;
@@ -473,7 +474,7 @@ class FerryService extends ChangeNotifier {
       _status('Телефон готовит резервную копию ${kind == 'contacts' ? 'контактов' : 'SMS'}…');
       return await waiter.future.timeout(const Duration(minutes: 4));
     } catch (e) {
-      _status('Резервное копирование не выполнено: $e');
+      _status(tr('Резервное копирование не выполнено: {error}', {'error': e}));
       await _incoming?.abort();
       _incoming = null;
       rethrow;
@@ -515,7 +516,7 @@ class FerryService extends ChangeNotifier {
         transferId: transferId,
       );
       await _transferComplete!.future.timeout(const Duration(seconds: 45));
-      _status('Файл контактов передан. Подтвердите импорт на Android.');
+      _status(tr('Файл контактов передан. Подтвердите импорт на Android.'));
     } finally {
       _flowAcks.finish();
       _outgoingTransferId = null;
@@ -540,14 +541,14 @@ class FerryService extends ChangeNotifier {
         'transferId': transferId,
         'dest': sanitizeRelative(remoteDirectory),
       });
-      _status('Uploading ${localPaths.length} selections');
+      _status(tr('Загрузка {count} объектов на устройство', {'count': localPaths.length}));
       await streamTransfer(
         walkLocalSelection(localPaths), peer, _status,
         (chunks) => _flowAcks.waitFor(transferId, chunks),
         transferId: transferId,
       );
       await _transferComplete!.future.timeout(const Duration(seconds: 45));
-      _status('Загрузка завершена и подтверждена получателем');
+      _status(tr('Загрузка завершена и подтверждена получателем'));
     } finally {
       _flowAcks.finish();
       _transferComplete = null;
@@ -608,7 +609,7 @@ class FerryService extends ChangeNotifier {
           if (request != null && !request.isCompleted) {
             request.completeError(StateError(msg['message'] as String));
           } else {
-            _status('Remote error: ${msg['message']}');
+            _status(tr('Ошибка удалённого устройства: {error}', {'error': msg['message']}));
           }
           break;
         case 'download':
@@ -642,7 +643,7 @@ class FerryService extends ChangeNotifier {
           _contactsImportName = fileName;
           _incoming = IncomingTransfer(dir, _status, msg['transferId'] as String);
           _discardingTransfer = false;
-          _status('Получаем адресную книгу из ${peer.remoteName}');
+          _status(tr('Получаем адресную книгу из {name}', {'name': peer.remoteName}));
           break;
         case 'personal_status':
           _status(msg['message']?.toString() ?? 'Операция на телефоне завершена');
@@ -658,7 +659,7 @@ class FerryService extends ChangeNotifier {
           await Directory(destination).create(recursive: true);
           _discardingTransfer = false;
           _incoming = IncomingTransfer(destination, _status, msg['transferId'] as String);
-          _status('Receiving incoming upload');
+          _status(tr('Получение файлов'));
           break;
         case 'dir':
         case 'file_begin':
@@ -715,7 +716,7 @@ class FerryService extends ChangeNotifier {
                     : 'SMS JSON сохранён: $file. HTML не создан: $htmlFailure');
                 if (pending != null && !pending.isCompleted) pending.complete(files);
               } catch (e) {
-                _status('Ошибка обработки резервной копии: $e');
+                _status(tr('Ошибка обработки резервной копии: {error}', {'error': e}));
                 if (pending != null && !pending.isCompleted) pending.completeError(e);
               }
             }
@@ -748,7 +749,7 @@ class FerryService extends ChangeNotifier {
           throw FormatException('Unknown operation ${msg['type']}');
       }
     } catch (e) {
-      _status('Transfer error: $e');
+      _status(tr('Ошибка передачи: {error}', {'error': e}));
       if (peer.ready) {
         await peer.sendJson({'type': 'error', 'message': '$e'});
       }
@@ -769,7 +770,7 @@ class FerryService extends ChangeNotifier {
     try {
       await incoming.consumeChunk(bytes, peer);
     } catch (e) {
-      _status('File transfer error: $e');
+      _status(tr('Ошибка файловой передачи: {error}', {'error': e}));
       await incoming.abort();
       _incoming = null;
       _discardingTransfer = true;
@@ -813,7 +814,7 @@ class FerryService extends ChangeNotifier {
       await _transferComplete!.future.timeout(const Duration(seconds: 45));
       _status('Резервная копия ${kind == 'contacts' ? 'контактов' : 'SMS'} передана');
     } catch (e) {
-      _status('Резервная копия: $e');
+      _status(tr('Резервная копия: {error}', {'error': e}));
       if (peer.ready) {
         await peer.sendJson({
           'type': 'error',
@@ -850,7 +851,7 @@ class FerryService extends ChangeNotifier {
         });
         return;
       }
-      _status('FerryPane восстанавливает контакты…');
+      _status(tr('FerryPane восстанавливает контакты…'));
       final result = await PersonalDataBridge.restoreContactsImport(filePath);
       final summary = 'Контакты: добавлено ${result['created']}, '
           'объединено ${result['expanded']}, '
@@ -859,7 +860,7 @@ class FerryService extends ChangeNotifier {
       _status(summary);
       await peer.sendJson({'type': 'personal_status', 'message': summary});
     } catch (e) {
-      _status('Не удалось восстановить контакты: $e');
+      _status(tr('Не удалось восстановить контакты: {error}', {'error': e}));
       if (peer.ready) {
         await peer.sendJson({
           'type': 'personal_status',
@@ -886,16 +887,16 @@ class FerryService extends ChangeNotifier {
     _transferComplete = Completer<void>();
     _flowAcks.begin(transferId);
     try {
-      _status('Sending ${selected.length} selections');
+      _status(tr('Отправлено {count} объектов', {'count': selected.length}));
       await streamTransfer(
         walkSelection(exportRoot, selected), peer, _status,
         (chunks) => _flowAcks.waitFor(transferId, chunks),
         transferId: transferId,
       );
       await _transferComplete!.future.timeout(const Duration(seconds: 45));
-      _status('Передача завершена и подтверждена получателем');
+      _status(tr('Передача завершена и подтверждена получателем'));
     } catch (e) {
-      _status('Send failed: $e');
+      _status(tr('Ошибка отправки: {error}', {'error': e}));
       if (peer.ready) {
         await peer.sendJson({'type': 'error', 'message': '$e'});
       }
