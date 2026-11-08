@@ -159,9 +159,12 @@ void main() {
       print('resume-debug: stages=$stageSizes, '
           'completed=${await File('${bRoot.path}/Documents/large.bin').exists()}, '
           'status=${server.lastMessage}');
-      expect(stageSizes.any((length) => length > 0), isTrue,
-          reason: 'Receiver must retain already-written bytes after disconnect; '
-              'staged sizes: $stageSizes, receiver status: ${server.lastMessage}');
+      if (!stageSizes.any((length) => length > 0)) {
+        throw StateError('No durable partial stage after disconnect: '
+            'sizes=$stageSizes, '
+            'finalExists=${await File('${bRoot.path}/Documents/large.bin').exists()}, '
+            'status=${server.lastMessage}');
+      }
 
       // Simulate a full process stop on both ends, rather than only a
       // temporary network interruption. The destination journal and sender's
