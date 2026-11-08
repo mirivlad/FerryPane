@@ -2,6 +2,14 @@
 
 All versions are development previews until the project has passed the device and security acceptance criteria.
 
+## 0.1.8 Preview — opt-in Android foreground recovery
+
+- Added an explicit Android foreground connected-device service with visible ongoing notification and enable/disable control in Settings.
+- Only identities paired before entering background can connect. Existing per-peer read/write rights and separate contacts/SMS export permissions remain mandatory; new pairing and contact imports still require interactive UI.
+- Headless Android Flutter engine and registered native Android plugin handle LAN, contacts/SMS access when the UI is not visible.
+- App and worker hand off the TCP listener without opening two competing servers, with peer grant refresh and regression tests.
+- No auto-start after reboot, forced termination recovery guarantee, VPN lockdown bypass, or unattended new pairing. Real-device acceptance across Android manufacturers is still pending.
+
 ## 0.1.7 Preview — resumable LAN file copying
 
 - Per-file encrypted resume protocol v4 with verified source SHA-256 and separately verified retained-prefix checksums. Only missing bytes are transmitted; source revisions never corrupt existing files.

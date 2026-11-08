@@ -6,11 +6,11 @@
 .pub/
 build/
 coverage/
-android/
-linux/
-windows/
-macos/
-ios/
+/android/
+/linux/
+/windows/
+/macos/
+/ios/
 .idea/
 .vscode/
 *.iml
