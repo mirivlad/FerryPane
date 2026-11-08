@@ -9,7 +9,7 @@ One Flutter/Dart peer application runs on every supported OS. Every installation
 ## What works
 
 - Browse folders on the current device and a connected peer; choose Windows drive from a disk picker in the local pane.
-- Send or receive files and whole nested folders using two identical directional buttons showing source selection counts. No ambiguous F5 shortcut.
+- Send or receive files and whole nested folders using two identical directional buttons showing source selection counts. Each panel has **«Выделить всё»** to select all files/folders at once (excluding the virtual `..` parent entry), and «Снять» to clear selection. No ambiguous F5 shortcut.
 - Two Windows PCs, Windows↔Linux, Linux↔Linux, Android↔PC, and Android↔Android use the same application and wire protocol.
 - Automatically discover peers using directed UDP broadcasts over all suitable **private IPv4 network interfaces** (Ethernet, Wi-Fi and private VPN interfaces) instead of only the OS default route. Public Internet and mobile-network interfaces are excluded.
 - Android additionally probes each available LAN network via Android's `Network.bindSocket` so a full-tunnel VPN need not silently capture discovery packets **when the VPN allows bypass**. The built-in manual IP option remains available.
