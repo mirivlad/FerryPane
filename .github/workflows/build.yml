@@ -122,10 +122,15 @@ jobs:
             '    url "https://maven.aliyun.com/repository/central"' \
             '    content { includeGroupByRegex("org\\.jetbrains\\.kotlin.*") }' \
             '  }' \
+            '  settings.pluginManagement.repositories.gradlePluginPortal()' \
+            '  settings.pluginManagement.repositories.google()' \
+            '  settings.pluginManagement.repositories.mavenCentral()' \
             '  settings.dependencyResolutionManagement.repositories.maven {' \
             '    url "https://maven.aliyun.com/repository/central"' \
             '    content { includeGroupByRegex("org\\.jetbrains\\.kotlin.*") }' \
             '  }' \
+            '  settings.dependencyResolutionManagement.repositories.google()' \
+            '  settings.dependencyResolutionManagement.repositories.mavenCentral()' \
             '}' > "$HOME/.gradle/init.d/ferrypane-kotlin.gradle"
       - name: Prepare Flutter platforms
         run: bash tool/prepare_platforms.sh
