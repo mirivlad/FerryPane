@@ -203,7 +203,7 @@ class FerryService extends ChangeNotifier {
         // FerryPane protocol. Refusing them prevents a webpage from tying up
         // the pending-pairing slot on localhost or another private interface.
         // dart:io native clients do not send an Origin header by default.
-        if (request.headers[HttpHeaders.originHeader]?.isNotEmpty == true) {
+        if (request.headers['origin']?.isNotEmpty == true) {
           request.response.statusCode = HttpStatus.forbidden;
           await request.response.close();
           return;
