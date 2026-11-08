@@ -10,6 +10,19 @@ class PersonalDataBridge {
 
   static bool get available => Platform.isAndroid;
 
+  /// Read the effective platform grants, not just FerryPane's saved opt-ins.
+  static Future<Map<String, bool>> grantedPermissions() async {
+    if (!available) return const {'contacts': false, 'sms': false};
+    final result = await _native.invokeMapMethod<String, dynamic>(
+      'backupPermissionStatus',
+    );
+    return {
+      'contacts': result?['contacts'] == true,
+      'sms': result?['sms'] == true,
+    };
+  }
+
+
   static Future<String> makeBackup(String type) async {
     if (!available) throw UnsupportedError('Backup requires Android');
     if (type != 'contacts' && type != 'sms') {

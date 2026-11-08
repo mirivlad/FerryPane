@@ -35,6 +35,14 @@ jobs:
         with:
           name: FerryPane-linux-x64
           path: FerryPane-linux-x64.tar.gz
+      - name: Build Debian installer
+        run: |
+          bash tool/build_deb.sh "$(sed -n 's/^version: \([^+]*\).*//p' pubspec.yaml)"
+          dpkg-deb --field FerryPane-linux-amd64.deb Package Version Architecture
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FerryPane-linux-deb
+          path: FerryPane-linux-amd64.deb
   windows:
     runs-on: windows-2022
     steps:
@@ -55,6 +63,24 @@ jobs:
         with:
           name: FerryPane-windows-x64
           path: FerryPane-windows-x64.zip
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          if (!(Test-Path $nsis)) { choco install nsis --no-progress -y }
+          if (!(Test-Path $nsis)) { throw "NSIS not found" }
+      - name: Build Windows setup EXE
+        shell: pwsh
+        run: |
+          $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          $source = (Resolve-Path 'build/windows/x64/runner/Release').Path
+          $version = ((Get-Content pubspec.yaml | Select-String '^version: (.+?)\+').Matches.Groups[1].Value)
+          & $nsis "/DAPP_SOURCE=$source" "/DAPP_VERSION=$version" "tool/windows/FerryPane.nsi"
+          if ($LASTEXITCODE -ne 0) { throw "NSIS installer failed" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FerryPane-windows-installer
+          path: FerryPane-windows-x64-setup.exe
   android:
     runs-on: ubuntu-24.04
     steps:
@@ -112,10 +138,12 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          name: FerryPane 0.1.4 Preview
+          name: FerryPane 0.1.5 Preview
           prerelease: true
           generate_release_notes: true
           files: |
             FerryPane-linux-x64.tar.gz
+            FerryPane-linux-amd64.deb
             FerryPane-windows-x64.zip
+            FerryPane-windows-x64-setup.exe
             FerryPane-android.apk
