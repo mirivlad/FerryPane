@@ -153,6 +153,12 @@ void main() {
           .cast<File>()
           .toList();
       final stageSizes = await Future.wait(stages.map((file) => file.length()));
+      // CI's compact test reporter omits matcher reasons; emit the
+      // destination state to distinguish partial loss from early completion.
+      // ignore: avoid_print
+      print('resume-debug: stages=$stageSizes, '
+          'completed=${await File('${bRoot.path}/Documents/large.bin').exists()}, '
+          'status=${server.lastMessage}');
       expect(stageSizes.any((length) => length > 0), isTrue,
           reason: 'Receiver must retain already-written bytes after disconnect; '
               'staged sizes: $stageSizes, receiver status: ${server.lastMessage}');
