@@ -7,7 +7,7 @@ group = 'top.mirv.ferrypane'
 version = '0.1.0'
 
 android {
-    namespace 'top.mirv.ferrypane'
+    namespace 'top.mirv.ferrypane.nativebridge'
     compileSdk 36
     defaultConfig { minSdk 23 }
     compileOptions {
