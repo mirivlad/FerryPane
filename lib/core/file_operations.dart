@@ -95,9 +95,9 @@ class FileManagerOps {
         throw const FormatException('Identical source and destination');
       }
     }
-    if (type == FileSystemEntityType.directory &&
-        (p.isWithin(source, target) || p.isWithin(target, source))) {
-      throw const FormatException('Cannot copy directory into itself or replace an ancestor');
+    if (p.isWithin(target, source) ||
+        (type == FileSystemEntityType.directory && p.isWithin(source, target))) {
+      throw const FormatException('Cannot replace an ancestor or copy into itself');
     }
     if (!await Directory(p.dirname(target)).exists()) {
       throw FileSystemException('Destination directory missing', target);
