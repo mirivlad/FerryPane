@@ -384,18 +384,26 @@ class IncomingTransfer {
   /// of an ordinary resumable copy. Explicit cancel and integrity failures
   /// discard their staged data. Personal backups never use a ResumeStore.
   Future<void> abort({bool preserve = false}) async {
-    try {
-      await _openedFile?.flush();
-      await _openedFile?.close();
-    } catch (_) {}
-    _openedFile = null;
+    // Detach the stage synchronously: disconnect and an in-flight chunk
+    // handler may both invoke abort. A second abort must never delete the
+    // stage already retained by the first one.
+    final opened = _openedFile;
     final temporary = _temporaryPath;
+    _openedFile = null;
+    _temporaryPath = null;
+    _currentRelative = null;
+    try {
+      await opened?.flush();
+      await opened?.close();
+    } catch (_) {
+      try {
+        await opened?.close();
+      } catch (_) {}
+    }
     if (temporary != null && (!preserve || resumeStore == null)) {
       final temp = File(temporary);
       if (await temp.exists()) await temp.delete();
     }
-    _temporaryPath = null;
-    _currentRelative = null;
   }
 
   static Future<String> _unusedName(String requested) async {
