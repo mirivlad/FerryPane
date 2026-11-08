@@ -1450,7 +1450,11 @@ class FerryService extends ChangeNotifier {
       final incoming = _incoming;
       // Only an error in *this transfer* can discard that transfer's data.
       if (incoming != null && msg['transferId'] == incoming.transferId) {
-        await incoming.abort();
+        // Ordinary resumable copies keep their staged bytes on uncertain
+        // transport/protocol failures. A subsequent attempt validates the
+        // source digest and both prefix hashes before reusing any bytes.
+        // Explicit cancellation still discards the stage.
+        await incoming.abort(preserve: incoming.resumeStore != null);
         _setIncoming(null);
         _discardingTransfer = true;
         _contactsImportDir = null;
@@ -1472,7 +1476,8 @@ class FerryService extends ChangeNotifier {
       // being written. In that case the disconnect handler is preserving
       // this partial transfer; do not race it with a destructive abort.
       final interrupted = connected != peer || !peer.ready;
-      await incoming.abort(preserve: interrupted);
+      await incoming.abort(
+          preserve: interrupted || incoming.resumeStore != null);
       if (_incoming == incoming) _setIncoming(null);
       _discardingTransfer = !interrupted;
       if (!interrupted &&
