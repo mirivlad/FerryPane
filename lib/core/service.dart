@@ -46,6 +46,55 @@ class FerryService extends ChangeNotifier {
   List<LocalSubnet> _subnets = [];
   Timer? _beacon;
   SecurePeer? connected;
+  SecurePeer? _pendingPeer;
+  final Map<String, List<DateTime>> _inboundAttempts = {};
+  DateTime? _pairingDeadline;
+  Timer? _pairingTimer;
+
+  bool get pairingOpen =>
+      _pairingDeadline != null && DateTime.now().isBefore(_pairingDeadline!);
+
+  /// Short opt-in window for FIRST pairing. Never persisted; reconnecting
+  /// devices must prove ownership of an already trusted identity.
+  void setPairingOpen(bool allowed) {
+    _pairingTimer?.cancel();
+    _pairingDeadline = allowed
+        ? DateTime.now().add(const Duration(minutes: 2))
+        : null;
+    if (allowed) {
+      _pairingTimer = Timer(const Duration(minutes: 2), () {
+        _pairingDeadline = null;
+        _notify();
+      });
+    }
+    _notify();
+  }
+
+  Future<void> disconnectPeer() async {
+    await connected?.disconnect();
+    _notify();
+  }
+
+  /// Public TCP listener must not accept Internet-sourced connections.
+  static bool isAllowedSource(String ip) =>
+      ip == '127.0.0.1' || LocalSubnet.isLocal(ip);
+
+  bool _acceptAttempt(String source) {
+    final now = DateTime.now();
+    final recent = _inboundAttempts.putIfAbsent(source, () => <DateTime>[]);
+    recent.removeWhere((at) => now.difference(at) > const Duration(minutes: 1));
+    if (recent.length >= 6) return false;
+    recent.add(now);
+    if (_inboundAttempts.length > 512) {
+      _inboundAttempts.removeWhere((_, values) {
+        values.removeWhere((at) =>
+            now.difference(at) > const Duration(minutes: 1));
+        return values.isEmpty;
+      });
+    }
+    return true;
+  }
+
   IncomingTransfer? _incoming;
   Completer<List<FileEntry>>? _listRequest;
   final FlowAcknowledgements _flowAcks = FlowAcknowledgements();
@@ -97,14 +146,33 @@ class FerryService extends ChangeNotifier {
       _http = await HttpServer.bind(InternetAddress.anyIPv4, listenPort, shared: true);
       broadcasting = true;
       _http!.listen((request) async {
+        final source = request.connectionInfo?.remoteAddress.address ?? '';
+        if (!isAllowedSource(source)) {
+          request.response.statusCode = HttpStatus.forbidden;
+          await request.response.close();
+          return;
+        }
+        if (connected?.ready == true || _pendingPeer != null) {
+          request.response.statusCode = HttpStatus.conflict;
+          await request.response.close();
+          return;
+        }
+        if (!_acceptAttempt(source)) {
+          request.response.statusCode = HttpStatus.tooManyRequests;
+          await request.response.close();
+          return;
+        }
         if (!WebSocketTransformer.isUpgradeRequest(request)) {
-          request.response.statusCode = 404;
+          request.response.statusCode = HttpStatus.notFound;
           await request.response.close();
           return;
         }
         try {
-          final socket = await WebSocketTransformer.upgrade(request);
-          _attach(socket, false, request.connectionInfo?.remoteAddress.address);
+          final socket = await WebSocketTransformer.upgrade(
+            request,
+            compression: CompressionOptions.compressionOff,
+          );
+          _attach(socket, false, source);
         } catch (e) {
           _status(tr('Входящее подключение отклонено: {error}', {'error': e}));
         }
@@ -284,33 +352,65 @@ class FerryService extends ChangeNotifier {
   Future<void> connect(String ipOrHost) async {
     final host = ipOrHost.trim();
     if (host.isEmpty) throw const FormatException('Enter device IP address');
-    connectionStatus = tr('Подключение к {device}', {'device': host});
-    _notify();
+    if (_pendingPeer != null) {
+      throw StateError('Another connection is being authenticated');
+    }
     final uri = Uri.parse(host.contains('://') ? host : 'ws://$host:$ferryPort');
+    if (uri.scheme != 'ws' || uri.host.isEmpty || uri.userInfo.isNotEmpty ||
+        (uri.path.isNotEmpty && uri.path != '/') ||
+        uri.hasQuery || uri.hasFragment) {
+      throw const FormatException('Only direct LAN WebSocket connections are allowed');
+    }
+    final resolved = await InternetAddress.lookup(uri.host)
+        .timeout(const Duration(seconds: 5));
+    if (resolved.isEmpty ||
+        resolved.any((ip) => !isAllowedSource(ip.address))) {
+      throw const FormatException('The destination is outside the local network');
+    }
+    _status(tr('Подключение к {device}', {'device': host}));
     if (Platform.isAndroid) {
       final routeInfo = await AndroidLanNetwork.routeTo(uri.host);
       if (routeInfo != null) _status(routeInfo);
     }
-    final socket = await WebSocket.connect(uri.toString())
-        .timeout(const Duration(seconds: 10));
+    final socket = await WebSocket.connect(uri.toString(),
+      compression: CompressionOptions.compressionOff,
+    ).timeout(const Duration(seconds: 10));
     _attach(socket, true, uri.host);
   }
 
   void _attach(WebSocket socket, bool initiator, String? remoteAddress) {
-    socket.pingInterval = const Duration(seconds: 20);
-    final old = connected;
-    if (old != null) {
-      old.disconnect();
+    if (_pendingPeer != null || (!initiator && connected?.ready == true)) {
+      unawaited(socket.close(WebSocketStatus.policyViolation, 'Busy'));
+      return;
     }
+    socket.pingInterval = const Duration(seconds: 20);
     late SecurePeer peer;
     peer = SecurePeer(
       socket: socket,
       identity: identity,
       initiator: initiator,
-      approve: onPairing,
+      allowHello: (remoteKey) =>
+          identity.trusts(remoteKey) || initiator || pairingOpen,
+      approve: (name, code, key) async {
+        if (!identity.trusts(key) && !initiator && !pairingOpen) {
+          return false;
+        }
+        final allowed = await onPairing(name, code, key);
+        // A timed-out, revoked or closed window cannot be accepted after
+        // the prompt; manually initiated outgoing connects are an exception.
+        return allowed &&
+            (identity.trusts(key) || initiator || pairingOpen);
+      },
       onJson: (msg) => _onJson(peer, msg),
       onChunk: (chunk) => _onChunk(peer, chunk),
       onDisconnected: (reason) {
+        if (_pendingPeer == peer) {
+          _pendingPeer = null;
+          if (initiator) {
+            _status(tr('Подключение отклонено: {reason}', {'reason': reason}));
+          }
+          _notify();
+        }
         if (connected == peer) {
           _incoming?.abort();
           _incoming = null;
@@ -327,7 +427,9 @@ class FerryService extends ChangeNotifier {
           _transferComplete = null;
           final waitingBackup = _personalBackupWaiter;
           if (waitingBackup != null && !waitingBackup.isCompleted) {
-            waitingBackup.completeError(StateError('Устройство отключилось до завершения резервной копии'));
+            waitingBackup.completeError(
+              StateError('Устройство отключилось до завершения резервной копии'),
+            );
           }
           _personalBackupWaiter = null;
           _personalBackupId = null;
@@ -339,22 +441,42 @@ class FerryService extends ChangeNotifier {
         }
       },
       onReady: () {
-        if (connected == peer) {
-          connectionStatus = tr('Подключено к {device}', {'device': peer.remoteName});
-          if (remoteAddress != null && remoteAddress.isNotEmpty) {
-            nearby[peer.remoteKey] = NearbyPeer(
-              peer.remoteName, remoteAddress, peer.remoteKey, DateTime.now(),
-            );
-            unawaited(identity.prefs.setString(
-              'known.host.${peer.remoteKey}', remoteAddress,
-            ));
-          }
-          _status(tr('Можно передавать файлы'));
+        if (_pendingPeer != peer) {
+          unawaited(peer.disconnect());
+          return;
         }
+        // An untrusted connection may never replace an existing session.
+        if (!initiator && connected?.ready == true) {
+          _pendingPeer = null;
+          unawaited(peer.disconnect());
+          return;
+        }
+        final previous = connected;
+        _pendingPeer = null;
+        connected = peer;
+        if (previous != null && previous != peer) {
+          unawaited(previous.disconnect());
+        }
+        if (!identity.trusts(peer.remoteKey)) {
+          // Defensive; SecurePeer will already have stored trust.
+          unawaited(peer.disconnect());
+          return;
+        }
+        setPairingOpen(false);
+        connectionStatus =
+            tr('Подключено к {device}', {'device': peer.remoteName});
+        if (remoteAddress != null && remoteAddress.isNotEmpty) {
+          nearby[peer.remoteKey] = NearbyPeer(
+            peer.remoteName, remoteAddress, peer.remoteKey, DateTime.now(),
+          );
+          unawaited(identity.prefs.setString(
+            'known.host.${peer.remoteKey}', remoteAddress,
+          ));
+        }
+        _status(tr('Можно передавать файлы'));
       },
     );
-    connected = peer;
-    connectionStatus = tr('Сопряжение…');
+    _pendingPeer = peer;
     _notify();
     unawaited(peer.run());
   }
@@ -368,9 +490,35 @@ class FerryService extends ChangeNotifier {
       await identity.prefs.remove('known.host.$peerKey');
       await identity.prefs.remove('backup.contacts.$peerKey');
       await identity.prefs.remove('backup.sms.$peerKey');
+      await identity.prefs.remove('access.read.$peerKey');
+      await identity.prefs.remove('access.write.$peerKey');
     }
     nearby.clear();
     await connected?.disconnect();
+    _notify();
+  }
+
+  bool get peerCanRead {
+    final peer = connected;
+    return peer != null && peer.ready && identity.trusts(peer.remoteKey) &&
+        (identity.prefs.getBool('access.read.${peer.remoteKey}') ?? true);
+  }
+
+  bool get peerCanWrite {
+    final peer = connected;
+    return peer != null && peer.ready && identity.trusts(peer.remoteKey) &&
+        (identity.prefs.getBool('access.write.${peer.remoteKey}') ?? true);
+  }
+
+  Future<void> setPeerAccess({required bool read, required bool write}) async {
+    final peer = connected;
+    if (peer == null || !peer.ready || !identity.trusts(peer.remoteKey)) {
+      throw StateError('No paired device connected');
+    }
+    if (!await identity.prefs.setBool('access.read.${peer.remoteKey}', read) ||
+        !await identity.prefs.setBool('access.write.${peer.remoteKey}', write)) {
+      throw StateError('Unable to save access permissions');
+    }
     _notify();
   }
 
@@ -560,7 +708,18 @@ class FerryService extends ChangeNotifier {
 
   Future<void> _onJson(SecurePeer peer, Map<String, dynamic> msg) async {
     try {
-      switch (msg['type']) {
+      if (connected != peer || !peer.ready || !identity.trusts(peer.remoteKey)) {
+        throw StateError('Message from unauthenticated peer');
+      }
+      final type = msg['type'];
+      if ((type == 'list' || type == 'download') && !peerCanRead) {
+        throw StateError('This device has no permission to read shared files');
+      }
+      if ((type == 'upload_start' || type == 'personal_contacts_import_start') &&
+          !peerCanWrite) {
+        throw StateError('This device has no permission to write shared files');
+      }
+      switch (type) {
         case 'list':
           final id = msg['id'];
           try {
@@ -922,9 +1081,11 @@ class FerryService extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _beacon?.cancel();
+    _pairingTimer?.cancel();
     _udp?.close();
     _http?.close(force: true);
     connected?.disconnect();
+    _pendingPeer?.disconnect();
     super.dispose();
   }
 }

@@ -26,6 +26,15 @@ for perm in permissions:
             f'    <uses-permission android:name="{perm}"/>\n    <application',
             1,
         )
+# Prevent Android cloud/device backups from restoring encrypted preferences
+# without their Android Keystore key. The original plaintext identity is
+# migrated and deleted in-app before network services become available.
+content = re.sub(
+    r'<application(?![^>]*android:allowBackup)',
+    '<application android:allowBackup="false"',
+    content,
+    count=1,
+)
 content = re.sub(
     r'<application(?![^>]*android:usesCleartextTraffic)',
     '<application android:usesCleartextTraffic="true"',

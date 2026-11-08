@@ -4,11 +4,17 @@ import 'package:path/path.dart' as p;
 /// Wire paths always use slash separators and are relative to an exported root.
 String sanitizeRelative(String value) {
   if (value.contains('\u0000')) throw const FormatException('NUL in path');
+  if (value.length > 2048) {
+    throw const FormatException('File path is too long');
+  }
   final normalized = value.replaceAll('\\', '/');
   if (normalized.startsWith('/') || RegExp(r'^[a-zA-Z]:').hasMatch(normalized)) {
     throw const FormatException('Absolute path is not permitted');
   }
   final parts = normalized.split('/');
+  if (parts.length > 64 || parts.any((part) => part.length > 255)) {
+    throw const FormatException('File path exceeds component limits');
+  }
   if (parts.any((part) => part == '..')) {
     throw const FormatException('Path traversal is not permitted');
   }
@@ -20,6 +26,10 @@ String sanitizeRelative(String value) {
 String containedPath(String root, String relative) {
   final clean = sanitizeRelative(relative);
   final base = p.normalize(p.absolute(root));
+  if (FileSystemEntity.typeSync(base, followLinks: false) ==
+      FileSystemEntityType.link) {
+    throw const FileSystemException('Shared root cannot be a symbolic link');
+  }
   final candidate = p.normalize(p.joinAll([base, ...clean.split('/').where((e) => e.isNotEmpty)]));
   if (candidate != base && !p.isWithin(base, candidate)) {
     throw const FormatException('Outside exported root');

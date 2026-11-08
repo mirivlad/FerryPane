@@ -7,6 +7,8 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:crypto/crypto.dart' as digest;
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'identity_storage.dart';
 import 'package:flutter/services.dart';
 
 typedef PairApproval = Future<bool> Function(String peerName, String code, String identity);
@@ -30,13 +32,15 @@ class PeerIdentity {
 
   PeerIdentity._(this.prefs, this.keyPair, this.publicKey, this.systemName);
 
-  static Future<PeerIdentity> load() async {
+  static Future<PeerIdentity> load({
+    IdentitySecretStore secretStore = const SystemIdentitySecretStore(),
+  }) async {
     final prefs = await SharedPreferences.getInstance();
-    var privateSeed = prefs.getString('ferrypane.identity.seed');
-    if (privateSeed == null) {
-      privateSeed = b64(randomBytes(32));
-      await prefs.setString('ferrypane.identity.seed', privateSeed);
-    }
+    final privateSeed = await IdentityKeyMigration.loadOrMigrate(
+      prefs,
+      secretStore,
+      newSeed: () => b64(randomBytes(32)),
+    );
     final pair = await X25519().newKeyPairFromSeed(fromB64(privateSeed));
     var deviceName = Platform.localHostname;
     if (Platform.isWindows) {
@@ -62,8 +66,19 @@ class PeerIdentity {
 
   bool trusts(String remoteKey) => prefs.getString('trusted.$remoteKey') != null;
 
-  Future<void> trust(String remoteKey, String name) =>
-      prefs.setString('trusted.$remoteKey', name);
+  Future<void> trust(String remoteKey, String name) async {
+    // Existing users keep their original permissions when upgrading.
+    // Freshly paired devices get read-only access by default; writable
+    // access must be explicitly enabled by the receiving device's owner.
+    if (!trusts(remoteKey)) {
+      if (!await prefs.setBool('access.write.$remoteKey', false)) {
+        throw StateError('Could not save new device access permissions');
+      }
+    }
+    if (!await prefs.setString('trusted.$remoteKey', name)) {
+      throw StateError('Could not persist device trust');
+    }
+  }
 
   Future<void> forget(String remoteKey) => prefs.remove('trusted.$remoteKey');
 
@@ -82,6 +97,7 @@ class SecurePeer {
   final PeerIdentity identity;
   final bool initiator;
   final PairApproval approve;
+  final bool Function(String remoteKey)? allowHello;
   final JsonHandler onJson;
   final ChunkHandler onChunk;
   final void Function(String) onDisconnected;
@@ -99,11 +115,19 @@ class SecurePeer {
   bool ready = false;
   String? _disconnectReason;
 
+  static const maxHelloBytes = 8192;
+  static const maxEncryptedCommandBytes = 1024 * 1024;
+  static const maxEncryptedChunkBytes = 256 * 1024;
+  static const handshakeTimeout = Duration(seconds: 12);
+  static const approvalTimeout = Duration(minutes: 2);
+
+
   SecurePeer({
     required this.socket,
     required this.identity,
     required this.initiator,
     required this.approve,
+    this.allowHello,
     required this.onJson,
     required this.onChunk,
     required this.onDisconnected,
@@ -117,7 +141,7 @@ class SecurePeer {
       final nonce = randomBytes(16);
       final ownHello = <String, dynamic>{
         'type': 'hello',
-        'version': 2,
+        'version': 3,
         'name': identity.displayName,
         'platform': Platform.operatingSystem,
         'identity': identity.publicString,
@@ -128,22 +152,37 @@ class SecurePeer {
       Map<String, dynamic> otherHello;
       if (initiator) {
         socket.add(jsonEncode(ownHello));
-        if (!await iterator.moveNext()) throw const SocketException('No handshake');
-        otherHello = Map<String, dynamic>.from(jsonDecode(iterator.current as String) as Map);
+        if (!await iterator.moveNext().timeout(handshakeTimeout)) {
+          throw const SocketException('No handshake');
+        }
+        otherHello = _readHello(iterator.current);
       } else {
-        if (!await iterator.moveNext()) throw const SocketException('No handshake');
-        otherHello = Map<String, dynamic>.from(jsonDecode(iterator.current as String) as Map);
+        if (!await iterator.moveNext().timeout(handshakeTimeout)) {
+          throw const SocketException('No handshake');
+        }
+        otherHello = _readHello(iterator.current);
         socket.add(jsonEncode(ownHello));
       }
 
-      if (otherHello['type'] != 'hello' || otherHello['version'] != 2) {
+      if (otherHello['type'] != 'hello' || otherHello['version'] != 3) {
         throw const FormatException('Несовместимая версия протокола. Обновите FerryPane на обоих устройствах.');
       }
       remoteName = otherHello['name'] as String;
+      if (remoteName.isEmpty || remoteName.length > 120) {
+        throw const FormatException('Invalid peer name');
+      }
       remotePlatform = otherHello['platform'] is String
           ? otherHello['platform'] as String
           : 'unknown';
       remoteKey = otherHello['identity'] as String;
+      if (fromB64(remoteKey).length != 32 ||
+          fromB64(otherHello['ephemeral'] as String).length != 32 ||
+          fromB64(otherHello['nonce'] as String).length != 16) {
+        throw const FormatException('Invalid peer cryptographic hello');
+      }
+      if (allowHello != null && !allowHello!(remoteKey)) {
+        throw const SocketException('Pairing is closed for unknown devices');
+      }
       final remoteIdentity = SimplePublicKey(fromB64(remoteKey), type: KeyPairType.x25519);
       final remoteEphemeral = SimplePublicKey(
         fromB64(otherHello['ephemeral'] as String),
@@ -159,6 +198,14 @@ class SecurePeer {
       );
       final otherNonce = fromB64(otherHello['nonce'] as String);
       final salt = initiator ? [...nonce, ...otherNonce] : [...otherNonce, ...nonce];
+      // Bind the full role-ordered, versioned peer hellos to the session
+      // derivation. A man-in-the-middle cannot substitute hostnames, identities,
+      // ephemeral public keys or protocol capabilities without changing
+      // authenticated session keys and the six-digit SAS.
+      final transcript = initiator
+          ? [...utf8.encode(jsonEncode(ownHello)), ...utf8.encode(jsonEncode(otherHello))]
+          : [...utf8.encode(jsonEncode(otherHello)), ...utf8.encode(jsonEncode(ownHello))];
+      final transcriptHash = digest.sha256.convert(transcript).bytes;
 
       final material = <int>[
         ...await staticSecret.extractBytes(),
@@ -167,43 +214,67 @@ class SecurePeer {
       final derived = await Hkdf(hmac: Hmac.sha256(), outputLength: 64).deriveKey(
         secretKey: SecretKey(material),
         nonce: salt,
-        info: utf8.encode('FerryPane session v1'),
+        info: [...utf8.encode('FerryPane session v3'), ...transcriptHash],
       );
       final keys = await derived.extractBytes();
       _transmitKey = SecretKey(initiator ? keys.sublist(0, 32) : keys.sublist(32));
       _receiveKey = SecretKey(initiator ? keys.sublist(32) : keys.sublist(0, 32));
 
+      var newlyAccepted = false;
       if (!identity.trusts(remoteKey)) {
         // Short authentication string (SAS) must match on BOTH screens.
-        final sasDigest = digest.sha256.convert([...keys, ...salt]).bytes;
+        final sasDigest = digest.sha256.convert([...keys, ...transcriptHash]).bytes;
         final sas = ((sasDigest[0] << 16) | (sasDigest[1] << 8) | sasDigest[2]) %
             1000000;
-        final accepted = await approve(remoteName, sas.toString().padLeft(6, '0'), remoteKey);
+        final accepted = await approve(
+          remoteName, sas.toString().padLeft(6, '0'), remoteKey,
+        ).timeout(approvalTimeout, onTimeout: () => false);
         if (!accepted) throw const SocketException('Pairing was rejected');
-        await identity.trust(remoteKey, remoteName);
+        newlyAccepted = true;
       }
 
       await sendJson({'type': 'ready'});
-      if (!await iterator.moveNext()) throw const SocketException('Peer closed before ready');
+      if (!await iterator.moveNext().timeout(handshakeTimeout)) {
+        throw const SocketException('Peer closed before ready');
+      }
+      if (iterator.current is! List<int> ||
+          (iterator.current as List<int>).length > maxHelloBytes) {
+        throw const FormatException('Invalid ready frame');
+      }
       final receivedReady = await _decrypt(Uint8List.fromList(iterator.current as List<int>));
       final peerReady = jsonDecode(utf8.decode(receivedReady.sublist(1))) as Map<String, dynamic>;
       if (receivedReady.first != 0 || peerReady['type'] != 'ready') {
         throw const FormatException('Unexpected handshake confirmation');
       }
+      // Persist trust only after the peer proved possession of the complete
+      // secret via an authenticated ready frame. An aborted handshake does not
+      // leave a trusted entry behind.
+      if (newlyAccepted) await identity.trust(remoteKey, remoteName);
       ready = true;
       onReady();
 
       while (await iterator.moveNext()) {
         final raw = iterator.current;
-        if (raw is! List<int>) throw const FormatException('Unexpected unencrypted message');
+        if (raw is! List<int>) {
+          throw const FormatException('Unexpected unencrypted message');
+        }
+        if (raw.length > maxEncryptedCommandBytes + 29) {
+          throw const FormatException('Incoming encrypted packet too large');
+        }
         final clear = await _decrypt(Uint8List.fromList(raw));
         if (clear.isEmpty) throw const FormatException('Empty secure packet');
         if (clear.first == 0) {
+          if (clear.length > maxEncryptedCommandBytes) {
+            throw const FormatException('Command too large');
+          }
           final message = Map<String, dynamic>.from(
             jsonDecode(utf8.decode(clear.sublist(1))) as Map,
           );
           await onJson(message);
         } else if (clear.first == 1) {
+          if (clear.length > maxEncryptedChunkBytes) {
+            throw const FormatException('Transfer chunk too large');
+          }
           await onChunk(Uint8List.fromList(clear.sublist(1)));
         } else {
           throw const FormatException('Unknown encrypted frame type');
@@ -220,6 +291,15 @@ class SecurePeer {
         onDisconnected(_disconnectReason ?? 'Peer closed the connection');
       }
     }
+  }
+
+  Map<String, dynamic> _readHello(dynamic frame) {
+    if (frame is! String || frame.length > maxHelloBytes) {
+      throw const FormatException('Invalid handshake message size or type');
+    }
+    final object = jsonDecode(frame);
+    if (object is! Map) throw const FormatException('Invalid peer hello');
+    return Map<String, dynamic>.from(object);
   }
 
   Future<Uint8List> _decrypt(Uint8List frame) async {

@@ -9,14 +9,16 @@ import 'package:ferrypane/core/transfer.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/memory_identity_store.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test('transfer two folder trees over one encrypted connection', () async {
     SharedPreferences.setMockInitialValues({});
-    final alice = await PeerIdentity.load();
+    final alice = await PeerIdentity.load(secretStore: MemoryIdentityStore());
     SharedPreferences.setMockInitialValues({});
-    final bob = await PeerIdentity.load();
+    final bob = await PeerIdentity.load(secretStore: MemoryIdentityStore());
     expect(alice.publicString, isNot(bob.publicString));
 
     final base = await Directory.systemTemp.createTemp('ferrypane_lan_');

@@ -579,6 +579,41 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
                   ),
               ],
             ),
+            if (service.connected?.ready == true) ...[
+              const SizedBox(height: 14),
+              Text(tr('Права устройства {name}', {
+                'name': service.connected!.remoteName,
+              }), style: const TextStyle(fontWeight: FontWeight.bold)),
+              Text(tr('Для новых сопряжений доступ на запись отключён по умолчанию. Старые разрешения сохраняются.')),
+              StatefulBuilder(
+                builder: (context, refresh) => Column(
+                  children: [
+                    SwitchListTile(
+                      dense: true,
+                      title: Text(tr('Разрешить чтение файлов')),
+                      value: service.peerCanRead,
+                      onChanged: (allowed) async {
+                        await service.setPeerAccess(
+                          read: allowed, write: service.peerCanWrite,
+                        );
+                        if (context.mounted) refresh(() {});
+                      },
+                    ),
+                    SwitchListTile(
+                      dense: true,
+                      title: Text(tr('Разрешить запись файлов')),
+                      value: service.peerCanWrite,
+                      onChanged: (allowed) async {
+                        await service.setPeerAccess(
+                          read: service.peerCanRead, write: allowed,
+                        );
+                        if (context.mounted) refresh(() {});
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ],
             if (Platform.isAndroid && service.connected?.ready == true) ...[
               const SizedBox(height: 16),
               Text(tr('Права доверенного устройства {name}:', {'name': service.connected!.remoteName}),
@@ -1009,9 +1044,11 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
                 children: [
                   Expanded(
                     child: Text(
-                      _showTemporaryStatus
-                        ? '${_service!.connectionStatus}  •  ${_service!.lastMessage}'
-                        : _service!.connectionStatus,
+                      _service!.pairingOpen
+                        ? tr('Сопряжение открыто на 2 минуты')
+                        : _showTemporaryStatus
+                          ? '${_service!.connectionStatus}  •  ${_service!.lastMessage}'
+                          : _service!.connectionStatus,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall,
@@ -1066,6 +1103,33 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
                                   ),
                                 ))
                             .toList(),
+                  ),
+                IconButton(
+                  tooltip: _service?.pairingOpen == true
+                      ? tr('Закрыть сопряжение')
+                      : tr('Разрешить новое сопряжение на 2 минуты'),
+                  onPressed: _service == null ||
+                          (_service!.connected?.ready ?? false)
+                      ? null
+                      : () {
+                          final service = _service!;
+                          service.setPairingOpen(!service.pairingOpen);
+                          _notice(service.pairingOpen
+                              ? tr('Сопряжение открыто на 2 минуты. Сравните коды на обоих устройствах.')
+                              : tr('Приём новых сопряжений закрыт'));
+                        },
+                  icon: Icon(_service?.pairingOpen == true
+                      ? Icons.lock_open_rounded
+                      : Icons.lock_outline_rounded),
+                  color: _service?.pairingOpen == true
+                      ? Theme.of(context).colorScheme.primary
+                      : null,
+                ),
+                if (_service?.connected?.ready == true)
+                  IconButton(
+                    tooltip: tr('Отключиться'),
+                    onPressed: () => _service!.disconnectPeer(),
+                    icon: const Icon(Icons.link_off),
                   ),
                 IconButton(
                   tooltip: tr('Подключиться по IP'),
