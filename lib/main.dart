@@ -427,7 +427,9 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
       }
       from.selected.clear();
       if (!from.remote && !to.remote) await _load(to);
-      _notice(tr('Передача запущена. Прогресс отображается внизу окна.'));
+      _notice(tr(_service?.hasPendingCopy == true
+          ? 'Передача запущена. Докачка включена.'
+          : 'Передача завершена'));
     } catch (e) {
       _notice(tr('Ошибка копирования: {error}', {'error': e}));
     }
@@ -966,6 +968,69 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
     );
   }
 
+  Widget _resumableCopyBar() {
+    final service = _service!;
+    final progress = service.transferProgress;
+    if (!service.hasPendingCopy && progress == null) {
+      return const SizedBox.shrink();
+    }
+    final speed = progress?.bytesPerSecond ?? 0;
+    final remaining = progress?.remaining;
+    final speedText = speed > 0
+        ? '${_humanSize(speed.round())}/s'
+        : '—';
+    final eta = remaining == null
+        ? '—'
+        : remaining.inHours > 0
+          ? '${remaining.inHours}ч ${remaining.inMinutes.remainder(60)}м'
+          : '${remaining.inMinutes}м ${remaining.inSeconds.remainder(60)}с';
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (progress != null) ...[
+            Text('${progress.file} — ${_humanSize(progress.done)} / '
+              '${_humanSize(progress.total)} · $speedText · ETA $eta',
+              maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: 3),
+            LinearProgressIndicator(value: progress.total == 0
+                ? 1 : progress.fraction, minHeight: 4),
+          ] else
+            Text(service.copyPaused
+                ? tr('Передача приостановлена; файлы для докачки сохранены')
+                : tr('Ожидание восстановления связи для докачки'),
+                style: Theme.of(context).textTheme.bodySmall),
+          const SizedBox(height: 4),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              if (service.copyPaused || (!service.copyActive && service.hasPendingCopy))
+                TextButton.icon(
+                  onPressed: () => service.resumeCopy(),
+                  icon: const Icon(Icons.play_arrow, size: 17),
+                  label: Text(tr('Продолжить')),
+                )
+              else if (service.canPauseCopy)
+                TextButton.icon(
+                  onPressed: () => service.pauseCopy(),
+                  icon: const Icon(Icons.pause, size: 17),
+                  label: Text(tr('Пауза')),
+                ),
+              if (service.hasPendingCopy)
+                TextButton.icon(
+                  onPressed: () => service.cancelCopy(),
+                  icon: const Icon(Icons.close, size: 17),
+                  label: Text(tr('Отмена передачи')),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _body(bool compact) {
     if (_service == null) {
       return Center(child: Text(_startup));
@@ -1030,6 +1095,7 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
             ],
           ),
         ),
+        _resumableCopyBar(),
         Material(
           color: Theme.of(context).colorScheme.surfaceContainerLow,
           child: InkWell(

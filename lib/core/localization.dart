@@ -98,6 +98,16 @@ class AppLanguage {
         'Pairing open for 2 minutes. Compare codes on both devices.',
     'Приём новых сопряжений закрыт': 'New pairing is closed',
     'Подключение отклонено: {reason}': 'Connection rejected: {reason}',
+    'Продолжить': 'Resume',
+    'Пауза': 'Pause',
+    'Отмена передачи': 'Cancel transfer',
+    'Передача приостановлена; файлы для докачки сохранены':
+        'Transfer paused; partial files saved for resuming',
+    'Ожидание восстановления связи для докачки':
+        'Waiting to reconnect and resume the transfer',
+    'Передача запущена. Докачка включена.':
+        'Transfer started; resuming is enabled.',
+    'Передача завершена': 'Transfer completed',
     'Отключиться': 'Disconnect',
     'Права устройства {name}': 'Permissions for {name}',
     'Для новых сопряжений доступ на запись отключён по умолчанию. Старые разрешения сохраняются.':

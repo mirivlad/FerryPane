@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'package:path/path.dart' as p;
 
+const _internalResumeDir = '.ferrypane-resume';
+
 /// Wire paths always use slash separators and are relative to an exported root.
 String sanitizeRelative(String value) {
   if (value.contains('\u0000')) throw const FormatException('NUL in path');
@@ -14,6 +16,9 @@ String sanitizeRelative(String value) {
   final parts = normalized.split('/');
   if (parts.length > 64 || parts.any((part) => part.length > 255)) {
     throw const FormatException('File path exceeds component limits');
+  }
+  if (parts.any((part) => part == _internalResumeDir)) {
+    throw const FormatException('Internal resume metadata is not a shared path');
   }
   if (parts.any((part) => part == '..')) {
     throw const FormatException('Path traversal is not permitted');
@@ -96,7 +101,8 @@ Future<List<FileEntry>> listAt(String base, String relative) async {
   final output = <FileEntry>[];
   await for (final node in dir.list(followLinks: false)) {
     final type = await FileSystemEntity.type(node.path, followLinks: false);
-    if (type == FileSystemEntityType.link) continue;
+    if (type == FileSystemEntityType.link ||
+        p.basename(node.path) == _internalResumeDir) continue;
     if (type != FileSystemEntityType.directory &&
         type != FileSystemEntityType.file) continue;
     final name = p.basename(node.path);
@@ -155,7 +161,8 @@ Stream<TransferFile> _walkDir(String path, String relative) async* {
   yield TransferFile(path, sanitizeRelative(relative), true);
   await for (final item in Directory(path).list(followLinks: false)) {
     final type = await FileSystemEntity.type(item.path, followLinks: false);
-    if (type == FileSystemEntityType.link) continue;
+    if (type == FileSystemEntityType.link ||
+        p.basename(item.path) == _internalResumeDir) continue;
     final nested = '${sanitizeRelative(relative)}/${p.basename(item.path)}';
     if (type == FileSystemEntityType.directory) {
       yield* _walkDir(item.path, nested);

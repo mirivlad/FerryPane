@@ -141,7 +141,7 @@ class SecurePeer {
       final nonce = randomBytes(16);
       final ownHello = <String, dynamic>{
         'type': 'hello',
-        'version': 3,
+        'version': 4,
         'name': identity.displayName,
         'platform': Platform.operatingSystem,
         'identity': identity.publicString,
@@ -164,7 +164,7 @@ class SecurePeer {
         socket.add(jsonEncode(ownHello));
       }
 
-      if (otherHello['type'] != 'hello' || otherHello['version'] != 3) {
+      if (otherHello['type'] != 'hello' || otherHello['version'] != 4) {
         throw const FormatException('Несовместимая версия протокола. Обновите FerryPane на обоих устройствах.');
       }
       remoteName = otherHello['name'] as String;
@@ -214,7 +214,7 @@ class SecurePeer {
       final derived = await Hkdf(hmac: Hmac.sha256(), outputLength: 64).deriveKey(
         secretKey: SecretKey(material),
         nonce: salt,
-        info: [...utf8.encode('FerryPane session v3'), ...transcriptHash],
+        info: [...utf8.encode('FerryPane session v4'), ...transcriptHash],
       );
       final keys = await derived.extractBytes();
       _transmitKey = SecretKey(initiator ? keys.sublist(0, 32) : keys.sublist(32));

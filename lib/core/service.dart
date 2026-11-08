@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
@@ -12,6 +13,7 @@ import 'lan_networks.dart';
 import 'localization.dart';
 import 'native_lan.dart';
 import 'personal_data.dart';
+import 'resume_store.dart';
 import 'secure_peer.dart';
 import 'sms_archive.dart';
 import 'transfer.dart';
@@ -25,6 +27,20 @@ class NearbyPeer {
   final String identity;
   final DateTime seen;
   const NearbyPeer(this.name, this.host, this.identity, this.seen);
+}
+
+class TransferProgress {
+  final String file;
+  final int done;
+  final int total;
+  final double bytesPerSecond;
+
+  const TransferProgress(this.file, this.done, this.total, this.bytesPerSecond);
+
+  double get fraction => total > 0 ? (done / total).clamp(0.0, 1.0) : 0;
+  Duration? get remaining => bytesPerSecond > 0 && done < total
+      ? Duration(seconds: ((total - done) / bytesPerSecond).ceil())
+      : null;
 }
 
 class FerryService extends ChangeNotifier {
@@ -71,6 +87,8 @@ class FerryService extends ChangeNotifier {
   }
 
   Future<void> disconnectPeer() async {
+    _retrySuppressed = true;
+    _retryTimer?.cancel();
     await connected?.disconnect();
     _notify();
   }
@@ -126,7 +144,7 @@ class FerryService extends ChangeNotifier {
       _status('$error');
       unawaited(() async {
         try {
-          await transfer.abort();
+          await transfer.abort(preserve: transfer.resumeStore != null);
         } catch (_) {}
         final peer = connected;
         if (peer != null && peer.ready) {
@@ -146,6 +164,252 @@ class FerryService extends ChangeNotifier {
   int? _pendingListId;
   final FlowAcknowledgements _flowAcks = FlowAcknowledgements();
   Completer<void>? _transferComplete;
+  Completer<ResumeReply>? _resumeWaiter;
+  String? _resumeWaitPath;
+  String? _resumeWaitTransfer;
+  Map<String, dynamic>? _pendingJob;
+  Timer? _retryTimer;
+  bool _retryingJob = false;
+  bool _retrySuppressed = false;
+  int _retryCount = 0;
+  bool _cancelRequested = false;
+  TransferProgress? transferProgress;
+  Future<void> _previousIncomingClose = Future<void>.value();
+
+  DateTime _progressSample = DateTime.fromMillisecondsSinceEpoch(0);
+  int _progressLastBytes = 0;
+  double _progressRate = 0;
+
+  bool get hasPendingCopy => _pendingJob != null;
+  bool get copyPaused => _pendingJob?['paused'] == true;
+  bool get copyActive => _sending || _incoming != null;
+  bool get canPauseCopy => _pendingJob != null && copyActive;
+  final void Function(String path, int done, int total)? onTransferProgress;
+
+  void _onFileProgress(String path, int done, int total) {
+    onTransferProgress?.call(path, done, total);
+    final now = DateTime.now();
+    final delta = now.difference(_progressSample).inMilliseconds;
+    if (delta >= 300 || transferProgress == null ||
+        transferProgress!.file != path) {
+      if (delta > 0 && done >= _progressLastBytes) {
+        final rate = (done - _progressLastBytes) * 1000 / delta;
+        _progressRate = _progressRate == 0
+            ? rate : _progressRate * 0.65 + rate * 0.35;
+      } else {
+        _progressRate = 0;
+      }
+      _progressSample = now;
+      _progressLastBytes = done;
+      transferProgress = TransferProgress(path, done, total, _progressRate);
+      _notify();
+    }
+  }
+
+  Future<ResumeReply> _requestResume(
+    SecurePeer peer, String transferId, String path, int size, String digest, {
+    bool reset = false,
+  }) async {
+    if (_resumeWaiter != null) throw StateError('Resume negotiation in progress');
+    final waiting = Completer<ResumeReply>();
+    _resumeWaiter = waiting;
+    _resumeWaitTransfer = transferId;
+    _resumeWaitPath = path;
+    try {
+      await peer.sendJson(reset ? {
+        'type': 'file_reset',
+        'transferId': transferId,
+        'path': path,
+      } : {
+        'type': 'file_begin',
+        'transferId': transferId,
+        'path': path,
+        'size': size,
+        'sha256': digest,
+      });
+      return await waiting.future.timeout(const Duration(seconds: 60));
+    } finally {
+      if (_resumeWaiter == waiting) {
+        _resumeWaiter = null;
+        _resumeWaitPath = null;
+        _resumeWaitTransfer = null;
+      }
+    }
+  }
+
+  String _hostFor(SecurePeer peer) {
+    final stored = _lastConnectionUrl;
+    if (stored != null) return stored;
+    final known = nearby[peer.remoteKey]?.host ??
+        identity.prefs.getString('known.host.${peer.remoteKey}');
+    if (known == null || known.isEmpty) return '';
+    return 'ws://$known:$ferryPort';
+  }
+  String? _lastConnectionUrl;
+
+  Future<void> _saveJob(Map<String, dynamic> job) async {
+    _pendingJob = job;
+    if (!await identity.prefs.setString(
+      'ferrypane.resume.pending', jsonEncode(job),
+    )) {
+      throw StateError('Could not save pending copy');
+    }
+    _retrySuppressed = false;
+    _retryCount = 0;
+    _notify();
+  }
+
+  Future<void> _finishJob() async {
+    _pendingJob = null;
+    _retryTimer?.cancel();
+    _retryCount = 0;
+    transferProgress = null;
+    _progressRate = 0;
+    await identity.prefs.remove('ferrypane.resume.pending');
+    _notify();
+  }
+
+  Future<void> _restoreJob() async {
+    final raw = identity.prefs.getString('ferrypane.resume.pending');
+    if (raw == null) return;
+    try {
+      final parsed = jsonDecode(raw);
+      if (parsed is! Map) throw const FormatException('Invalid transfer job');
+      final job = Map<String, dynamic>.from(parsed);
+      if (job['version'] != 1 || job['peer'] is! String ||
+          !identity.trusts(job['peer'] as String) ||
+          job['paths'] is! List || job['destination'] is! String ||
+          !['upload', 'download'].contains(job['mode']) ||
+          job['scope'] is! String ||
+          !RegExp(r'^[a-f0-9]{64}$').hasMatch(job['scope'])) {
+        throw const FormatException('Invalid persisted transfer');
+      }
+      _pendingJob = job;
+      _status('Есть незавершённая передача — можно продолжить');
+      if (job['paused'] != true) _scheduleRetry();
+    } catch (e) {
+      _status('Невозможно восстановить сохранённое задание: $e');
+    }
+  }
+
+  void _scheduleRetry() {
+    _retryTimer?.cancel();
+    if (_disposed || _retrySuppressed || _pendingJob == null ||
+        _pendingJob!['paused'] == true || _retryingJob ||
+        _retryCount >= 12) return;
+    final delay = _retryCount == 0 ? 2 : min(40, 2 << min(4, _retryCount));
+    _retryTimer = Timer(Duration(seconds: delay), () {
+      unawaited(_retryPending());
+    });
+  }
+
+  Future<void> _retryPending() async {
+    final job = _pendingJob;
+    if (_disposed || _retryingJob || _retrySuppressed ||
+        job == null || job['paused'] == true) return;
+    _retryingJob = true;
+    try {
+      final peer = connected;
+      if (peer == null || !peer.ready || peer.remoteKey != job['peer']) {
+        if (_pendingPeer != null) return;
+        final address = job['host'] as String?;
+        if (address == null || address.isEmpty) {
+          _status('Адрес устройства неизвестен: подключитесь вручную для докачки');
+          return;
+        }
+        _retryCount++;
+        await connect(address);
+        // The authenticated onReady callback will repeat the saved job.
+        return;
+      }
+      if (_sending || _incoming != null) {
+        _retryTimer?.cancel();
+        _retryTimer = Timer(const Duration(milliseconds: 600), () {
+          if (!_disposed) unawaited(_retryPending());
+        });
+        return;
+      }
+      _status('Восстанавливаем передачу…');
+      final paths = List<String>.from(job['paths'] as List);
+      if (job['mode'] == 'upload') {
+        await upload(paths, job['destination'] as String, replay: true);
+      } else {
+        await download(paths, job['destination'] as String, replay: true);
+      }
+    } catch (e) {
+      if (_disposed) return;
+      _status('Не удалось продолжить: $e');
+    } finally {
+      _retryingJob = false;
+      if (connected?.ready != true && _pendingJob != null) _scheduleRetry();
+    }
+  }
+
+  /// Pause retains verified pieces and the persisted operation; no network
+  /// reconnection occurs until the user explicitly resumes it.
+  Future<void> pauseCopy() async {
+    final job = _pendingJob;
+    if (job == null) return;
+    job['paused'] = true;
+    _retryTimer?.cancel();
+    _retrySuppressed = true;
+    await identity.prefs.setString(
+      'ferrypane.resume.pending', jsonEncode(job),
+    );
+    _cancelRequested = true;
+    final incoming = _incoming;
+    if (incoming != null) {
+      _discardingTransfer = true;
+      await incoming.abort(preserve: true);
+      _setIncoming(null);
+    }
+    final peer = connected;
+    final id = _outgoingTransferId ?? incoming?.transferId;
+    if (peer != null && peer.ready && id != null) {
+      await peer.sendJson({'type': 'transfer_pause', 'transferId': id});
+    }
+    _flowAcks.cancel(StateError('Transfer paused'));
+    _status('Передача приостановлена, докачка сохранена');
+    _notify();
+  }
+
+  Future<void> resumeCopy() async {
+    if (_pendingJob == null) return;
+    _pendingJob!['paused'] = false;
+    _retrySuppressed = false;
+    _retryCount = 0;
+    _cancelRequested = false;
+    await identity.prefs.setString(
+      'ferrypane.resume.pending', jsonEncode(_pendingJob),
+    );
+    if (connected?.ready == true) {
+      unawaited(_retryPending());
+    } else {
+      _scheduleRetry();
+    }
+    _notify();
+  }
+
+  Future<void> cancelCopy() async {
+    _retryTimer?.cancel();
+    _retrySuppressed = true;
+    _cancelRequested = true;
+    final incoming = _incoming;
+    if (incoming != null) {
+      _discardingTransfer = true;
+      await incoming.abort();
+      _setIncoming(null);
+    }
+    final id = _outgoingTransferId ?? incoming?.transferId;
+    final peer = connected;
+    if (peer != null && peer.ready && id != null) {
+      await peer.sendJson({'type': 'transfer_cancel', 'transferId': id});
+    }
+    _flowAcks.cancel(StateError('Transfer cancelled'));
+    await _finishJob();
+    _status('Передача отменена. Готовые файлы сохранены.');
+  }
+
   Completer<List<String>>? _personalBackupWaiter;
   String? _personalBackupId;
   String? _personalBackupKind;
@@ -168,6 +432,7 @@ class FerryService extends ChangeNotifier {
   FerryService(this.identity, this.onPairing, this.exportRoot, {
     this.listenPort = ferryPort,
     this.enableDiscovery = true,
+    this.onTransferProgress,
   });
   int? get boundPort => _http?.port;
 
@@ -252,6 +517,7 @@ class FerryService extends ChangeNotifier {
     }
     await _refreshAddresses();
     if (enableDiscovery) await _startDiscovery();
+    await _restoreJob();
   }
 
   Future<void> _refreshAddresses() async {
@@ -431,6 +697,7 @@ class FerryService extends ChangeNotifier {
     final socket = await WebSocket.connect(uri.toString(),
       compression: CompressionOptions.compressionOff,
     ).timeout(const Duration(seconds: 10));
+    _lastConnectionUrl = uri.toString();
     _attach(socket, true, uri.host);
   }
 
@@ -468,7 +735,10 @@ class FerryService extends ChangeNotifier {
           _notify();
         }
         if (connected == peer) {
-          _incoming?.abort();
+          final interrupted = _incoming;
+          _previousIncomingClose = interrupted == null
+              ? Future<void>.value()
+              : interrupted.abort(preserve: true);
           _setIncoming(null);
           _contactsImportDir = null;
           _contactsImportName = null;
@@ -477,6 +747,13 @@ class FerryService extends ChangeNotifier {
           _listRequest = null;
           _pendingListId = null;
           _flowAcks.cancel(StateError('Disconnected: $reason'));
+          final waitResume = _resumeWaiter;
+          if (waitResume != null && !waitResume.isCompleted) {
+            waitResume.completeError(StateError('Disconnected: $reason'));
+          }
+          _resumeWaiter = null;
+          if (_pendingJob != null && !_retrySuppressed &&
+              _pendingJob!['paused'] != true) _scheduleRetry();
           final completed = _transferComplete;
           if (completed != null && !completed.isCompleted) {
             completed.completeError(StateError('Disconnected: $reason'));
@@ -531,6 +808,12 @@ class FerryService extends ChangeNotifier {
           ));
         }
         _status(tr('Можно передавать файлы'));
+        if (_pendingJob != null && peer.remoteKey == _pendingJob!['peer'] &&
+            _pendingJob!['paused'] != true && !_retrySuppressed) {
+          Future<void>.delayed(const Duration(milliseconds: 150), () {
+            if (!_disposed) unawaited(_retryPending());
+          });
+        }
       },
     );
     _pendingPeer = peer;
@@ -633,24 +916,54 @@ class FerryService extends ChangeNotifier {
     }
   }
 
-  Future<void> download(List<String> remotePaths, String localDirectory) async {
+  Future<void> download(
+    List<String> remotePaths, String localDirectory, {
+    bool replay = false,
+  }) async {
     final peer = connected;
     if (peer == null || !peer.ready) throw StateError('No connected device');
-    if (_incoming != null || _sending) throw StateError('Another transfer is in progress');
+    if (_incoming != null || _sending) {
+      throw StateError('Another transfer is in progress');
+    }
     await Directory(localDirectory).create(recursive: true);
+    final paths = remotePaths.map(sanitizeRelative).toList();
+    final scope = ResumeStore.selectionScope(paths);
+    if (!replay) {
+      await _saveJob({
+        'version': 1,
+        'mode': 'download',
+        'peer': peer.remoteKey,
+        'host': _hostFor(peer),
+        'paths': paths,
+        'destination': localDirectory,
+        'scope': scope,
+        'paused': false,
+      });
+    }
     final transferId = _newTransferId();
+    await _previousIncomingClose;
+    final store = await ResumeStore.open(
+      localDirectory, peer.remoteKey, scope,
+    );
+    _cancelRequested = false;
     _discardingTransfer = false;
-    _setIncoming(IncomingTransfer(localDirectory, _status, transferId));
+    _setIncoming(IncomingTransfer(
+      localDirectory, _status, transferId,
+      resumeStore: store,
+      onProgress: _onFileProgress,
+    ));
     try {
       await peer.sendJson({
         'type': 'download',
         'transferId': transferId,
-        'paths': remotePaths.map(sanitizeRelative).toList(),
+        'paths': paths,
+        'scope': scope,
       });
-      _status(tr('Загрузка {count} объектов', {'count': remotePaths.length}));
-    } catch (_) {
-      await _incoming?.abort();
+      _status('Передача началась; докачка включена');
+    } catch (e) {
+      await _incoming?.abort(preserve: true);
       _setIncoming(null);
+      if (_pendingJob != null && peer.ready) await _finishJob();
       rethrow;
     }
   }
@@ -727,6 +1040,10 @@ class FerryService extends ChangeNotifier {
         walkLocalSelection([filePath]), peer, _status,
         (chunks) => _flowAcks.waitFor(transferId, chunks),
         transferId: transferId,
+        negotiate: (path, size, digest, {bool reset = false}) =>
+            _requestResume(
+              peer, transferId, path, size, digest, reset: reset,
+            ),
       );
       await _transferComplete!.future.timeout(const Duration(seconds: 45));
       _status(tr('Файл контактов передан. Подтвердите импорт на Android.'));
@@ -739,12 +1056,32 @@ class FerryService extends ChangeNotifier {
     }
   }
 
-  Future<void> upload(List<String> localPaths, String remoteDirectory) async {
+  Future<void> upload(
+    List<String> localPaths, String remoteDirectory, {
+    bool replay = false,
+  }) async {
     final peer = connected;
     if (peer == null || !peer.ready) throw StateError('No connected device');
-    if (_sending || _incoming != null) throw StateError('Another transfer is in progress');
+    if (_sending || _incoming != null) {
+      throw StateError('Another transfer is in progress');
+    }
+    final selected = localPaths.map((path) => p.normalize(p.absolute(path))).toList();
+    final scope = ResumeStore.selectionScope(selected);
+    if (!replay) {
+      await _saveJob({
+        'version': 1,
+        'mode': 'upload',
+        'peer': peer.remoteKey,
+        'host': _hostFor(peer),
+        'paths': selected,
+        'destination': sanitizeRelative(remoteDirectory),
+        'scope': scope,
+        'paused': false,
+      });
+    }
     final transferId = _newTransferId();
     _sending = true;
+    _cancelRequested = false;
     _outgoingTransferId = transferId;
     _transferComplete = Completer<void>();
     _flowAcks.begin(transferId);
@@ -753,20 +1090,39 @@ class FerryService extends ChangeNotifier {
         'type': 'upload_start',
         'transferId': transferId,
         'dest': sanitizeRelative(remoteDirectory),
+        'scope': scope,
       });
-      _status(tr('Загрузка {count} объектов на устройство', {'count': localPaths.length}));
+      _status(tr('Загрузка {count} объектов на устройство',
+          {'count': selected.length}));
       await streamTransfer(
-        walkLocalSelection(localPaths), peer, _status,
+        walkLocalSelection(selected), peer, _status,
         (chunks) => _flowAcks.waitFor(transferId, chunks),
         transferId: transferId,
+        negotiate: (path, size, digest, {bool reset = false}) =>
+            _requestResume(
+              peer, transferId, path, size, digest, reset: reset,
+            ),
+        onProgress: _onFileProgress,
+        cancelled: () => _cancelRequested,
       );
       await _transferComplete!.future.timeout(const Duration(seconds: 45));
       _status(tr('Загрузка завершена и подтверждена получателем'));
+      if (_pendingJob != null) await _finishJob();
+    } catch (e) {
+      if (_pendingJob != null && peer.ready && !_cancelRequested &&
+          _pendingJob!['paused'] != true) {
+        await _finishJob();
+        rethrow;
+      }
+      if (_pendingJob != null && _pendingJob!['paused'] != true) {
+        _status('Связь прервана, задание сохранено для докачки');
+      }
     } finally {
       _flowAcks.finish();
       _transferComplete = null;
       _outgoingTransferId = null;
       _sending = false;
+      if (_pendingJob == null) transferProgress = null;
       _notify();
     }
   }
@@ -833,6 +1189,12 @@ class FerryService extends ChangeNotifier {
             pendingBackup.completeError(reason);
             handled = true;
           }
+          final waitingResume = _resumeWaiter;
+          if (transferId != null && transferId == _resumeWaitTransfer &&
+              waitingResume != null && !waitingResume.isCompleted) {
+            waitingResume.completeError(reason);
+            handled = true;
+          }
           final outgoing = _transferComplete;
           if (transferId != null && transferId == _outgoingTransferId &&
               outgoing != null && !outgoing.isCompleted) {
@@ -846,6 +1208,10 @@ class FerryService extends ChangeNotifier {
             await incoming.abort();
             _setIncoming(null);
             _discardingTransfer = true;
+            if (_pendingJob != null &&
+                _pendingJob!['peer'] == peer.remoteKey) {
+              await _finishJob();
+            }
             _contactsImportDir = null;
             _contactsImportName = null;
             handled = true;
@@ -902,12 +1268,55 @@ class FerryService extends ChangeNotifier {
           if (_incoming != null || _sending) throw StateError('Receiver busy');
           final destination = containedPath(exportRoot, msg['dest'] as String);
           await Directory(destination).create(recursive: true);
+          await _previousIncomingClose;
+          final resume = await ResumeStore.open(
+            destination, peer.remoteKey, msg['scope'] as String,
+          );
           _discardingTransfer = false;
-          _setIncoming(IncomingTransfer(destination, _status, msg['transferId'] as String));
+          _setIncoming(IncomingTransfer(
+            destination, _status, msg['transferId'] as String,
+            resumeStore: resume,
+            onProgress: _onFileProgress,
+          ));
           _status(tr('Получение файлов'));
+          break;
+        case 'transfer_keepalive':
+          if (msg['transferId'] == _incoming?.transferId) _touchIncoming();
+          break;
+        case 'file_resume':
+          if (msg['transferId'] == _resumeWaitTransfer &&
+              msg['path'] == _resumeWaitPath &&
+              _resumeWaiter != null && !_resumeWaiter!.isCompleted) {
+            _resumeWaiter!.complete(ResumeReply.fromJson(msg));
+          }
+          break;
+        case 'transfer_pause':
+        case 'transfer_cancel':
+          final current = _incoming;
+          final transferId = msg['transferId'];
+          final paused = type == 'transfer_pause';
+          if (current != null && current.transferId == transferId) {
+            await current.abort(preserve: paused);
+            _setIncoming(null);
+            _discardingTransfer = true;
+          }
+          if (transferId == _outgoingTransferId) {
+            _cancelRequested = true;
+            _flowAcks.cancel(StateError(paused ? 'Paused' : 'Cancelled'));
+            final waiting = _resumeWaiter;
+            if (waiting != null && !waiting.isCompleted) {
+              waiting.completeError(StateError(paused ? 'Paused' : 'Cancelled'));
+            }
+            final result = _transferComplete;
+            if (result != null && !result.isCompleted) {
+              result.completeError(StateError(paused ? 'Paused' : 'Cancelled'));
+            }
+          }
+          _status(paused ? 'Передача приостановлена' : 'Передача отменена');
           break;
         case 'dir':
         case 'file_begin':
+        case 'file_reset':
         case 'file_end':
         case 'transfer_end':
           if (_discardingTransfer) {
@@ -965,6 +1374,12 @@ class FerryService extends ChangeNotifier {
                 _status(tr('Ошибка обработки резервной копии: {error}', {'error': e}));
                 if (pending != null && !pending.isCompleted) pending.completeError(e);
               }
+            }
+            if (_pendingJob != null && _pendingJob!['mode'] == 'download' &&
+                _pendingJob!['peer'] == peer.remoteKey &&
+                _pendingJob!['scope'] == incoming.resumeStore?.scope &&
+                _pendingJob!['paused'] != true) {
+              await _finishJob();
             }
             final importDir = _contactsImportDir;
             final importName = _contactsImportName;
@@ -1032,6 +1447,9 @@ class FerryService extends ChangeNotifier {
       await incoming.abort();
       _setIncoming(null);
       _discardingTransfer = true;
+      if (_pendingJob != null && _pendingJob!['peer'] == peer.remoteKey) {
+        await _finishJob();
+      }
       if (peer.ready) {
         await peer.sendJson({
           'type': 'error',
@@ -1078,6 +1496,10 @@ class FerryService extends ChangeNotifier {
         walkLocalSelection([tempFile]), peer, _status,
         (chunks) => _flowAcks.waitFor(transferId, chunks),
         transferId: transferId,
+        negotiate: (path, size, digest, {bool reset = false}) =>
+            _requestResume(
+              peer, transferId, path, size, digest, reset: reset,
+            ),
       );
       await _transferComplete!.future.timeout(const Duration(seconds: 45));
       _status('Резервная копия ${kind == 'contacts' ? 'контактов' : 'SMS'} передана');
@@ -1155,6 +1577,7 @@ class FerryService extends ChangeNotifier {
       return;
     }
     _sending = true;
+    _cancelRequested = false;
     _outgoingTransferId = transferId;
     _transferComplete = Completer<void>();
     _flowAcks.begin(transferId);
@@ -1164,12 +1587,18 @@ class FerryService extends ChangeNotifier {
         walkSelection(exportRoot, selected), peer, _status,
         (chunks) => _flowAcks.waitFor(transferId, chunks),
         transferId: transferId,
+        negotiate: (path, size, digest, {bool reset = false}) =>
+            _requestResume(
+              peer, transferId, path, size, digest, reset: reset,
+            ),
+        onProgress: _onFileProgress,
+        cancelled: () => _cancelRequested,
       );
       await _transferComplete!.future.timeout(const Duration(seconds: 45));
       _status(tr('Передача завершена и подтверждена получателем'));
     } catch (e) {
       _status(tr('Ошибка отправки: {error}', {'error': e}));
-      if (peer.ready) {
+      if (peer.ready && !_cancelRequested) {
         await peer.sendJson({
           'type': 'error',
           'transferId': transferId,
@@ -1181,6 +1610,7 @@ class FerryService extends ChangeNotifier {
       _transferComplete = null;
       _outgoingTransferId = null;
       _sending = false;
+      if (_pendingJob == null) transferProgress = null;
       _notify();
     }
   }
@@ -1200,6 +1630,7 @@ class FerryService extends ChangeNotifier {
     _beacon?.cancel();
     _pairingTimer?.cancel();
     _incomingIdleTimer?.cancel();
+    _retryTimer?.cancel();
     _udp?.close();
     _http?.close(force: true);
     connected?.disconnect();
