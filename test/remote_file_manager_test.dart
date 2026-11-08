@@ -61,6 +61,24 @@ void main() {
           target: 'created/report-backup.txt');
       expect(await File(p.join(bRoot.path, 'created',
           'report-backup.txt')).readAsString(), 'hello');
+      // Write access alone must never authorize destructive mutations.
+      expect(b.peerCanManage, isFalse);
+      await expectLater(
+        a.remoteFileOp('delete', path: 'created/report-backup.txt'),
+        throwsA(isA<StateError>()),
+      );
+      await expectLater(
+        a.remoteFileOp('rename', path: 'created/report-backup.txt',
+            target: 'created/rejected.txt'),
+        throwsA(isA<StateError>()),
+      );
+      expect(await File(p.join(bRoot.path, 'created',
+          'report-backup.txt')).exists(), isTrue);
+      final denialAudit = await b.fileOperationHistory();
+      expect(denialAudit.any((event) => event['action'] == 'delete' &&
+          event['status'] == 'failed'), isTrue);
+      await b.setPeerAccess(read: true, write: true, manage: true);
+      expect(b.peerCanManage, isTrue);
       await a.remoteFileOp('rename', path: 'created/report-backup.txt',
           target: 'created/renamed.txt');
       await a.remoteFileOp('delete', path: 'created/renamed.txt');
@@ -80,6 +98,12 @@ void main() {
             path: 'created/report.txt', expectedDigest: expectedDigest),
         throwsA(isA<StateError>()),
       );
+
+      final successfulAudit = await b.fileOperationHistory();
+      expect(successfulAudit.any((event) => event['action'] == 'rename' &&
+          event['status'] == 'completed'), isTrue);
+      expect(successfulAudit.any((event) => event['action'] == 'delete' &&
+          event['status'] == 'completed'), isTrue);
 
       await b.setPeerAccess(read: true, write: false);
       await expectLater(

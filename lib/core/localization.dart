@@ -38,6 +38,38 @@ class AppLanguage {
   }
 
   static const Map<String, String> _en = {
+    'Отсутствующие разрешения всегда означают запрет. Право на удаление выдаётся отдельно.':
+        'Missing permissions always deny. Remote deletion requires a separate grant.',
+    'Я сверил коды — совпадают': 'I compared both codes — they match',
+    'Разрешить удаление, перемещение и замену':
+        'Allow remote deletion, moving and replacement',
+    'Отдельное разрешение для необратимых операций. Все удалённые изменения записываются в журнал.':
+        'Separate permission for irreversible operations. Remote modifications are logged.',
+    'Ошибка изменения прав: {error}': 'Could not update permissions: {error}',
+    'Журнал удалённых файловых операций': 'Remote file operation history',
+    'Операций пока нет': 'No operations yet',
+    'Журнал недоступен: {error}': 'Could not open history: {error}',
+    'Создать зашифрованное хранилище ключа': 'Create encrypted identity store',
+    'Разблокировать ключ FerryPane': 'Unlock FerryPane identity',
+    'Пароль не сохраняется. Без него невозможно восстановить ключ устройства и доверенные подключения.':
+        'Your password is never saved. Without it you cannot recover your identity or trusted connections.',
+    'Введите пароль к локальному зашифрованному ключу.':
+        'Enter the password for your encrypted local identity.',
+    'Пароль': 'Password',
+    'Повторите пароль': 'Repeat password',
+    'Введите пароль не короче 12 символов':
+        'Use a password of at least 12 characters',
+    'Пароли не совпадают': 'Passwords do not match',
+    'Создать': 'Create',
+    'Разблокировать': 'Unlock',
+    'Существующие сопряжения требуют исходного ключа. Разблокируйте системный keyring; новый ключ не создан.':
+        'Existing paired devices require the original key. Unlock the system keyring; no new identity was created.',
+    'Ошибка хранилища ключа: {error}': 'Identity storage error: {error}',
+    'Если Secret Service недоступен, можно вручную выбрать зашифрованный файл с паролем. При заблокированном существующем ключе разблокируйте системный keyring.':
+        'If Secret Service is unavailable, explicitly choose a password-encrypted file. Unlock your existing system keyring when it is locked.',
+    'Зашифрованное файловое хранилище': 'Encrypted file identity storage',
+    'Повторить запуск': 'Retry startup',
+
     'Новая папка': 'New folder',
     'Поиск…': 'Search…',
     'Поиск файлов и папок': 'Find files and folders',

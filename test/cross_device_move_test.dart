@@ -49,8 +49,8 @@ void main() {
       await a.connect('ws://127.0.0.1:' + b.boundPort.toString());
       await ready(() =>
           a.connected?.ready == true && b.connected?.ready == true);
-      await a.setPeerAccess(read: true, write: true);
-      await b.setPeerAccess(read: true, write: true);
+      await a.setPeerAccess(read: true, write: true, manage: true);
+      await b.setPeerAccess(read: true, write: true, manage: true);
 
       final before = await FileManagerOps.digestLocal([source.path]);
       expect(await a.uploadVerified([source.path], ''), isTrue);

@@ -2,6 +2,19 @@
 
 From 0.2.0 releases are published without Preview branding. No independent security audit or broad real-device acceptance is implied.
 
+## 0.2.1 — security hardening
+
+- Missing read/write permissions now deny; fresh pairings explicitly get read-only.
+- Remote delete, rename, move and replace require a separate destructive grant,
+  off by default. Receiver logs started, rejected, completed and failed file operations.
+- Linux without Secret Service may explicitly choose password-encrypted file
+  identity storage (PBKDF2-SHA256 and AES-256-GCM). Locked existing identities
+  never silently downgrade or regenerate.
+- UDP discovery advertises short-lived random tokens, not the persistent
+  identity or configured device name. Windows listener binds exclusively.
+- Removed unused Android Kotlin copies; updated architecture and security docs.
+- No independent audit or broad Android foreground acceptance is claimed.
+
 ## 0.2.0 — full dual-panel file manager
 
 - Both local and remote panels support creating folders, renaming, confirmed recursive deletion, same-device copy and move, plus cut/copy/paste.

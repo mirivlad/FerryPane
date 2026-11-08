@@ -2,12 +2,16 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:path/path.dart' as p;
 import 'package:permission_handler/permission_handler.dart';
 
 import 'core/files.dart';
+import 'core/identity_storage.dart';
+import 'core/encrypted_identity_store.dart';
 import 'core/file_operations.dart';
 import 'core/desktop_locations.dart';
 import 'core/service.dart';
@@ -103,6 +107,11 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
   bool _androidStorageGranted = !Platform.isAndroid;
   bool _foregroundActive = false;
   bool _changingForeground = false;
+  bool _linuxKeyringUnavailable = false;
+  String? _linuxPassphrase;
+  bool _creatingLinuxStore = false;
+  static const _linuxStorageMode = 'ferrypane.identity.storageMode';
+
   final _ip = TextEditingController();
   Map<String, bool> _systemBackupPermissions =
       const {'contacts': false, 'sms': false};
@@ -191,6 +200,111 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
     }
   }
 
+  Future<String?> _askLinuxPassphrase({required bool create}) async {
+    final controller = TextEditingController();
+    final confirm = TextEditingController();
+    String? validation;
+    try {
+      return await showDialog<String>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (dialogContext, update) => AlertDialog(
+            title: Text(tr(create ? 'Создать зашифрованное хранилище ключа'
+                : 'Разблокировать ключ FerryPane')),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(tr(create
+                      ? 'Пароль не сохраняется. Без него невозможно восстановить '
+                          'ключ устройства и доверенные подключения.'
+                      : 'Введите пароль к локальному зашифрованному ключу.')),
+                  TextField(
+                    controller: controller,
+                    obscureText: true,
+                    autofocus: true,
+                    decoration: InputDecoration(labelText: tr('Пароль')),
+                  ),
+                  if (create) TextField(
+                    controller: confirm,
+                    obscureText: true,
+                    decoration: InputDecoration(labelText: tr('Повторите пароль')),
+                  ),
+                  if (validation != null)
+                    Text(validation!, style: TextStyle(
+                        color: Theme.of(dialogContext).colorScheme.error)),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(dialogContext),
+                  child: Text(tr('Отмена'))),
+              FilledButton(
+                onPressed: () {
+                  if (controller.text.isEmpty ||
+                      (create && controller.text.runes.length < 12)) {
+                    update(() => validation = tr(
+                        'Введите пароль не короче 12 символов'));
+                    return;
+                  }
+                  if (create && confirm.text != controller.text) {
+                    update(() => validation = tr('Пароли не совпадают'));
+                    return;
+                  }
+                  Navigator.pop(dialogContext, controller.text);
+                },
+                child: Text(tr(create ? 'Создать' : 'Разблокировать')),
+              ),
+            ],
+          ),
+        ),
+      );
+    } finally {
+      controller.dispose();
+      confirm.dispose();
+    }
+  }
+
+  Future<void> _openEncryptedLinuxStore() async {
+    if (!Platform.isLinux) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final alreadySelected =
+          prefs.getString(_linuxStorageMode) == 'encrypted-file';
+      if (!alreadySelected &&
+          prefs.getKeys().any((key) => key.startsWith('trusted.')) &&
+          prefs.getString(IdentityKeyMigration.legacyName) == null) {
+        _notice(tr('Существующие сопряжения требуют исходного ключа. '
+            'Разблокируйте системный keyring; новый ключ не создан.'));
+        return;
+      }
+      final password = await _askLinuxPassphrase(create: !alreadySelected);
+      if (password == null) return;
+      if (!alreadySelected) {
+        if (await File(EncryptedFileIdentityStore.defaultPath()).exists()) {
+          throw StateError('Encrypted identity file already exists; '
+              'refusing to overwrite it');
+        }
+        if (!await prefs.setString(_linuxStorageMode, 'encrypted-file')) {
+          throw StateError('Could not save identity storage mode');
+        }
+      }
+      _creatingLinuxStore = !alreadySelected;
+      _linuxPassphrase = password;
+      if (mounted) setState(() {
+        _linuxKeyringUnavailable = false;
+        _startup = tr('Запуск…');
+      });
+      await _initialize();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _linuxKeyringUnavailable = true);
+        _notice(tr('Ошибка хранилища ключа: {error}', {'error': e}));
+      }
+    }
+  }
+
   Future<void> _initialize() async {
     try {
       if (Platform.isAndroid) {
@@ -203,8 +317,28 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
           ? defaultShare
           : _initialLocal;
       _foregroundActive = await AndroidForegroundAccess.isRunning;
+      IdentitySecretStore secretStore = const SystemIdentitySecretStore();
+      if (Platform.isLinux) {
+        final prefs = await SharedPreferences.getInstance();
+        if (prefs.getString(_linuxStorageMode) == 'encrypted-file') {
+          final pass = _linuxPassphrase ??
+              await _askLinuxPassphrase(create: false);
+          if (pass == null) {
+            throw StateError('Encrypted identity requires a password');
+          }
+          secretStore = EncryptedFileIdentityStore(
+            passphrase: pass,
+            requireExisting: !_creatingLinuxStore,
+          );
+        }
+      }
       final service = await FerryService.initialize(
-          _confirmPairing, root, incomingEnabled: !_foregroundActive);
+          _confirmPairing, root,
+          incomingEnabled: !_foregroundActive,
+          secretStore: secretStore);
+      _linuxPassphrase = null;
+      _creatingLinuxStore = false;
+      _linuxKeyringUnavailable = false;
       service.addListener(_serviceChanged);
       service.onContactsImportConsent = _confirmContactsImport;
       if (Platform.isAndroid) {
@@ -220,7 +354,20 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
       });
       await _load(_left);
     } catch (e) {
-      if (mounted) setState(() => _startup = tr('Ошибка запуска: {error}', {'error': e}));
+      _linuxPassphrase = null;
+      _creatingLinuxStore = false;
+      if (mounted) {
+        setState(() {
+          _startup = tr('Ошибка запуска: {error}', {'error': e});
+          _linuxKeyringUnavailable = Platform.isLinux &&
+              (e is PlatformException ||
+               e.toString().contains('keyring') ||
+               e.toString().contains('identity') ||
+               e.toString().contains('Identity') ||
+               e.toString().contains('libsecret') ||
+               e.toString().contains('Secret Service'));
+        });
+      }
     }
   }
 
@@ -290,7 +437,7 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: Text(tr('Коды совпадают')),
+            child: Text(tr('Я сверил коды — совпадают')),
           ),
         ],
       ),
@@ -339,6 +486,55 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
       ),
     );
     return accepted ?? false;
+  }
+
+  Future<void> _showOperationHistory(FerryService service) async {
+    try {
+      final events = await service.fileOperationHistory();
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(tr('Журнал удалённых файловых операций')),
+          content: SizedBox(
+            width: 620,
+            height: 400,
+            child: events.isEmpty
+                ? Center(child: Text(tr('Операций пока нет')))
+                : ListView.builder(
+                    itemCount: events.length,
+                    itemBuilder: (_, index) {
+                      final event = events[events.length - index - 1];
+                      final target = event['target'];
+                      return ListTile(
+                        dense: true,
+                        title: Text(
+                          event['action'].toString() + ' • ' +
+                              event['status'].toString(),
+                          maxLines: 1, overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: Text(
+                          event['at'].toString() + ' • ' +
+                          event['peer'].toString() + '\n' +
+                          (event['path']?.toString() ?? '') +
+                          (target == null ? '' : ' → ' + target.toString()),
+                          maxLines: 3, overflow: TextOverflow.ellipsis,
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: Text(tr('Закрыть')),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      _notice(tr('Журнал недоступен: {error}', {'error': e}));
+    }
   }
 
   Future<void> _setBackupAccess(
@@ -995,7 +1191,7 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
               Text(tr('Права устройства {name}', {
                 'name': service.connected!.remoteName,
               }), style: const TextStyle(fontWeight: FontWeight.bold)),
-              Text(tr('Для новых сопряжений доступ на запись отключён по умолчанию. Старые разрешения сохраняются.')),
+              Text(tr('Отсутствующие разрешения всегда означают запрет. Право на удаление выдаётся отдельно.')),
               StatefulBuilder(
                 builder: (context, refresh) => Column(
                   children: [
@@ -1021,6 +1217,28 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
                         );
                         AndroidForegroundAccess.refreshPermissions();
                         if (context.mounted) refresh(() {});
+                      },
+                    ),
+                    SwitchListTile(
+                      dense: true,
+                      title: Text(tr('Разрешить удаление, перемещение и замену')),
+                      subtitle: Text(tr(
+                        'Отдельное разрешение для необратимых операций. '
+                        'Все удалённые изменения записываются в журнал.',
+                      )),
+                      value: service.peerCanManage,
+                      onChanged: !service.peerCanWrite ? null : (allowed) async {
+                        try {
+                          await service.setPeerAccess(
+                            read: service.peerCanRead,
+                            write: service.peerCanWrite,
+                            manage: allowed,
+                          );
+                          AndroidForegroundAccess.refreshPermissions();
+                          if (context.mounted) refresh(() {});
+                        } catch (e) {
+                          _notice(tr('Ошибка изменения прав: {error}', {'error': e}));
+                        }
                       },
                     ),
                   ],
@@ -1076,6 +1294,11 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
               ),
             ],
             const SizedBox(height: 10),
+            TextButton.icon(
+              onPressed: () => _showOperationHistory(service),
+              icon: const Icon(Icons.history),
+              label: Text(tr('Журнал удалённых файловых операций')),
+            ),
             Text(tr('IP: {addresses}', {'addresses': '${service.ipAddresses.join(', ')}:$ferryPort'})),
           ],
           ),
@@ -1544,7 +1767,34 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
 
   Widget _body(bool compact) {
     if (_service == null) {
-      return Center(child: Text(_startup));
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SelectableText(_startup, textAlign: TextAlign.center),
+              if (Platform.isLinux && _linuxKeyringUnavailable) ...[
+                const SizedBox(height: 12),
+                Text(tr('Если Secret Service недоступен, можно вручную '
+                    'выбрать зашифрованный файл с паролем. '
+                    'При заблокированном существующем ключе '
+                    'разблокируйте системный keyring.')),
+                const SizedBox(height: 8),
+                FilledButton.icon(
+                  onPressed: _openEncryptedLinuxStore,
+                  icon: const Icon(Icons.lock),
+                  label: Text(tr('Зашифрованное файловое хранилище')),
+                ),
+              ],
+              if (Platform.isLinux) TextButton(
+                onPressed: _initialize,
+                child: Text(tr('Повторить запуск')),
+              ),
+            ],
+          ),
+        ),
+      );
     }
     return Column(
       children: [

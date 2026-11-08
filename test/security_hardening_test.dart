@@ -173,8 +173,16 @@ void main() {
       expect(bob.connected?.remoteKey, aliceIdentity.publicString);
       expect(bobPrompts, 1);
 
-      // New peers are read-only on the receiver; old peers retain their
-      // legacy permissions when the stored flag is absent.
+      // All missing grants deny, including when profiles are incomplete.
+      expect(bob.peerCanRead, isTrue);
+      expect(bob.peerCanManage, isFalse);
+      await bob.identity.prefs.remove(
+          'access.read.' + aliceIdentity.publicString);
+      expect(bob.peerCanRead, isFalse);
+      await bob.identity.prefs.remove(
+          'access.write.' + aliceIdentity.publicString);
+      expect(bob.peerCanWrite, isFalse);
+      await bob.setPeerAccess(read: true, write: false);
       expect(bob.peerCanRead, isTrue);
       expect(bob.peerCanWrite, isFalse);
       await bob.setPeerAccess(read: true, write: true);

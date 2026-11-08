@@ -9,6 +9,8 @@ import 'package:path/path.dart' as p;
 
 import 'files.dart';
 import 'file_operations.dart';
+import 'file_operation_journal.dart';
+import 'identity_storage.dart';
 import 'flow_acknowledgements.dart';
 import 'lan_networks.dart';
 import 'localization.dart';
@@ -62,6 +64,10 @@ class FerryService extends ChangeNotifier {
   DateTime _lastSubnetRefresh = DateTime.fromMillisecondsSinceEpoch(0);
   List<LocalSubnet> _subnets = [];
   Timer? _beacon;
+  // Discovery uses an ephemeral random token, never the public identity key
+  // or user-configured device name. Names appear after secure handshake.
+  final String _discoveryToken = b64(randomBytes(16));
+
   SecurePeer? connected;
   SecurePeer? _pendingPeer;
   final Map<String, List<DateTime>> _inboundAttempts = {};
@@ -477,9 +483,11 @@ class FerryService extends ChangeNotifier {
 
   static Future<FerryService> initialize(
     Future<bool> Function(String, String, String) approval,
-    String initialRoot, {bool incomingEnabled = true}
-  ) async {
-    final id = await PeerIdentity.load();
+    String initialRoot, {
+    bool incomingEnabled = true,
+    IdentitySecretStore secretStore = const SystemIdentitySecretStore(),
+  }) async {
+    final id = await PeerIdentity.load(secretStore: secretStore);
     final root = id.prefs.getString('ferrypane.export.root') ?? initialRoot;
     final result = FerryService(id, approval, root,
         incomingEnabled: incomingEnabled);
@@ -496,7 +504,7 @@ class FerryService extends ChangeNotifier {
   Future<void> start() async {
     if (incomingEnabled) {
     try {
-      _http = await HttpServer.bind(InternetAddress.anyIPv4, listenPort, shared: true);
+      _http = await HttpServer.bind(InternetAddress.anyIPv4, listenPort, shared: false);
       broadcasting = true;
       _http!.listen((request) async {
         final source = request.connectionInfo?.remoteAddress.address ?? '';
@@ -620,10 +628,6 @@ class FerryService extends ChangeNotifier {
           final sender = current.address;
           final port = current.port;
           final text = utf8.decode(current.data, allowMalformed: true);
-          if (text == 'FERRYPANE_DISCOVER_V1') {
-            _announce(sender, port); // legacy discovery fallback
-            continue;
-          }
           _receiveDiscovery(text, sender.address, port);
         }
       });
@@ -643,8 +647,7 @@ class FerryService extends ChangeNotifier {
 
   Map<String, dynamic> _discoveryMessage(String type) => {
         'type': type,
-        'name': name,
-        'identity': publicIdentity,
+        'session': _discoveryToken,
         'port': ferryPort,
       };
 
@@ -653,26 +656,40 @@ class FerryService extends ChangeNotifier {
     try {
       final data = jsonDecode(payload) as Map<String, dynamic>;
       final type = data['type'];
-      if (type != 'ferrypane_probe' && type != 'ferrypane_peer') return;
-      final peerId = data['identity'];
-      final peerName = data['name'];
-      if (peerId is! String || peerId.isEmpty ||
-          peerName is! String || peerName.trim().isEmpty ||
-          peerId == publicIdentity) return;
-      nearby[peerId] = NearbyPeer(
-        peerName, host, peerId, DateTime.now(),
-      );
+      if (type != 'ferrypane_probe_v2' && type != 'ferrypane_peer_v2') {
+        return;
+      }
+      final session = data['session'];
+      if (session is! String || session.length < 16 || session.length > 64 ||
+          session == _discoveryToken) return;
+
+      // Match already trusted names through their last saved LAN address.
+      // Unknown peers remain anonymous until both users confirm pairing.
+      String display = 'LAN $host';
+      String peerId = session;
+      for (final key in identity.prefs.getKeys()) {
+        if (!key.startsWith('known.host.')) continue;
+        if (identity.prefs.getString(key) != host) continue;
+        final trustedId = key.substring('known.host.'.length);
+        final trustedName = identity.prefs.getString('trusted.$trustedId');
+        if (trustedName != null) {
+          peerId = trustedId;
+          display = trustedName;
+          break;
+        }
+      }
+      nearby[peerId] = NearbyPeer(display, host, peerId, DateTime.now());
       _notify();
-      if (type == 'ferrypane_probe') {
+      if (type == 'ferrypane_probe_v2') {
         _announce(InternetAddress(host), port);
       }
     } catch (_) {
-      // Unrelated network traffic is not a valid discovery announcement.
+      // Ignore unrelated LAN packets.
     }
   }
 
   void _announce(InternetAddress to, int port) {
-    final data = utf8.encode(jsonEncode(_discoveryMessage('ferrypane_peer')));
+    final data = utf8.encode(jsonEncode(_discoveryMessage('ferrypane_peer_v2')));
     // Send unicast responses with a source address on the same network
     // whenever possible, rather than relying on the system default route.
     final candidates = _subnets.where((s) => s.contains(to.address)).toList();
@@ -704,7 +721,7 @@ class FerryService extends ChangeNotifier {
       if (DateTime.now().difference(_lastSubnetRefresh).inSeconds > 25) {
         await _refreshAddresses();
       }
-      final payload = utf8.encode(jsonEncode(_discoveryMessage('ferrypane_probe')));
+      final payload = utf8.encode(jsonEncode(_discoveryMessage('ferrypane_probe_v2')));
       for (final subnet in _subnets) {
         // Directed broadcast only within the interface's actual subnet.
         // When the prefix is unavailable, limited broadcast is still scoped
@@ -922,6 +939,7 @@ class FerryService extends ChangeNotifier {
       await identity.prefs.remove('backup.sms.$peerKey');
       await identity.prefs.remove('access.read.$peerKey');
       await identity.prefs.remove('access.write.$peerKey');
+      await identity.prefs.remove('access.manage.$peerKey');
     }
     nearby.clear();
     await connected?.disconnect();
@@ -931,22 +949,38 @@ class FerryService extends ChangeNotifier {
   bool get peerCanRead {
     final peer = connected;
     return peer != null && peer.ready && identity.trusts(peer.remoteKey) &&
-        (identity.prefs.getBool('access.read.${peer.remoteKey}') ?? true);
+        (identity.prefs.getBool('access.read.${peer.remoteKey}') ?? false);
   }
 
   bool get peerCanWrite {
     final peer = connected;
     return peer != null && peer.ready && identity.trusts(peer.remoteKey) &&
-        (identity.prefs.getBool('access.write.${peer.remoteKey}') ?? true);
+        (identity.prefs.getBool('access.write.${peer.remoteKey}') ?? false);
   }
 
-  Future<void> setPeerAccess({required bool read, required bool write}) async {
+  bool get peerCanManage {
+    final peer = connected;
+    return peer != null && peer.ready && identity.trusts(peer.remoteKey) &&
+        peerCanWrite &&
+        (identity.prefs.getBool('access.manage.${peer.remoteKey}') ?? false);
+  }
+
+  Future<List<Map<String, dynamic>>> fileOperationHistory() =>
+      FileOperationJournal.read(identity.prefs);
+
+  Future<void> setPeerAccess({
+    required bool read, required bool write, bool? manage,
+  }) async {
     final peer = connected;
     if (peer == null || !peer.ready || !identity.trusts(peer.remoteKey)) {
       throw StateError('No paired device connected');
     }
-    if (!await identity.prefs.setBool('access.read.${peer.remoteKey}', read) ||
-        !await identity.prefs.setBool('access.write.${peer.remoteKey}', write)) {
+    // On a failed write leave ambiguous grants disabled, never enabled.
+    if (!await identity.prefs.setBool(
+            'access.manage.${peer.remoteKey}', write &&
+                (manage ?? peerCanManage)) ||
+        !await identity.prefs.setBool('access.write.${peer.remoteKey}', write) ||
+        !await identity.prefs.setBool('access.read.${peer.remoteKey}', read)) {
       throw StateError('Unable to save access permissions');
     }
     _notify();
@@ -1333,26 +1367,64 @@ class FerryService extends ChangeNotifier {
           type == 'download') && !peerCanRead) {
         throw StateError('This device has no permission to read shared files');
       }
-      if ((type == 'upload_start' || type == 'personal_contacts_import_start' ||
-          type == 'file_op') && !peerCanWrite) {
+      if ((type == 'upload_start' || type == 'personal_contacts_import_start') &&
+          !peerCanWrite) {
         throw StateError('This device has no permission to write shared files');
       }
       switch (type) {
         case 'file_op':
-          if (_sending || _incoming != null) {
-            throw StateError('File transfer in progress');
+          final operation = msg['action'] as String;
+          final conflict = msg['conflict'] as String? ?? 'keepBoth';
+          final destructive = const {
+            'delete', 'deleteVerified', 'move', 'rename',
+          }.contains(operation) || conflict == 'replace';
+          final audit = <String, dynamic>{
+            'peer': peer.remoteName,
+            'key': peer.remoteKey.substring(0, 12),
+            'action': operation,
+            'path': msg['path'],
+            'target': msg['target'],
+            'id': msg['id'],
+          };
+          try {
+            if (!peerCanWrite) {
+              throw StateError('Remote file modification permission denied');
+            }
+            if (destructive && !peerCanManage) {
+              throw StateError(
+                'Remote delete, rename, move or replace permission denied',
+              );
+            }
+            if (_sending || _incoming != null) {
+              throw StateError('File transfer in progress');
+            }
+            // Persist before mutation: a crash leaves a visible started entry.
+            await FileOperationJournal.append(
+              identity.prefs, {...audit, 'status': 'started'},
+            );
+            final result = await FileManagerOps.remote(
+              exportRoot, operation,
+              path: msg['path'] as String,
+              target: msg['target'] as String?,
+              conflict: conflict,
+              expectedDigest: msg['expectedDigest'] as String?,
+            );
+            await FileOperationJournal.append(
+              identity.prefs, {...audit,
+                'status': result.skipped ? 'skipped' : 'completed'},
+            );
+            await peer.sendJson({
+              'type': 'file_op_result', 'id': msg['id'],
+              'path': result.path, 'skipped': result.skipped,
+            });
+          } catch (error) {
+            await FileOperationJournal.append(
+              identity.prefs, {...audit, 'status': 'failed',
+                'error': error.toString().length > 200
+                    ? error.toString().substring(0, 200) : error.toString()},
+            );
+            rethrow;
           }
-          final result = await FileManagerOps.remote(
-            exportRoot, msg['action'] as String,
-            path: msg['path'] as String,
-            target: msg['target'] as String?,
-            conflict: msg['conflict'] as String? ?? 'keepBoth',
-            expectedDigest: msg['expectedDigest'] as String?,
-          );
-          await peer.sendJson({
-            'type': 'file_op_result', 'id': msg['id'],
-            'path': result.path, 'skipped': result.skipped,
-          });
           break;
         case 'file_op_result':
           final waitingOp = _fileOperationRequest;

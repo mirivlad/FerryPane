@@ -1,6 +1,6 @@
 # FerryPane architecture
 
-This file describes the **implementation in v0.1.6 Preview**, not just an aspirational design. The project began in November 2026.
+This file describes the **implementation in v0.2.1**, not just an aspirational design. The project began in November 2026.
 
 ## Runtime model
 
@@ -37,13 +37,13 @@ Android VPN lockdown can prevent direct physical-network sockets, and FerryPane 
 - Directory entries are streamed recursively; no full in-memory manifest is required.
 - Paths are relative to the receiver's permitted root. Absolute paths, traversal and symbolic-link paths are rejected.
 - Incoming content is written to temporary files, checked using SHA-256, then finalized. Conflicting filenames/folders get unique suffixes rather than overwriting.
-- Multiple concurrent peers, transfer queue, resume, sync, remote delete/move and cancellation are **not implemented**.
+- Multi-peer sessions and directory synchronization are not implemented. Resume, pause/cancel and remote delete/move were added in 0.1.7/0.2.0. Version 0.2.1 adds a separate remote destructive grant and receiver journal.
 
 Local copy paths and export roots are constrained by the operating system. For Android, All-files access does not include application-private data or all restricted directories.
 
 ## Personal-data backup and contact import
 
-Android Kotlin code (under `tool/android/`) provides a `MethodChannel` bridge:
+Android Kotlin code (under `packages/ferrypane_native/android/src/main/kotlin/top/mirv/ferrypane/`) provides a `MethodChannel` bridge:
 
 - **Contacts export:** read Android ContactsProvider with `READ_CONTACTS`, serialize as vCard `.vcf` in a private temporary folder, transfer to the requesting trusted desktop and remove the temporary copy.
 - **SMS export:** read Android Telephony.Sms with `READ_SMS`; produce `ferrypane.sms.v1` JSON with timestamps, direction and optional contact names. On the PC, Dart generates a **self-contained HTML viewer** with embedded Base64 data, local search and `textContent` rendering to prevent SMS text becoming executable markup. No MMS, RCS or deleted messages.
