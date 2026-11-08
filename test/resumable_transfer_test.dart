@@ -189,8 +189,21 @@ void main() {
       await a2.connect('ws://127.0.0.1:${b2.boundPort}');
       await waitUntil(() => !a2!.hasPendingCopy &&
           File('${bRoot.path}/Documents/large.bin').existsSync());
-      expect(sawResume, isTrue,
-          reason: 'The resumed prefix should be reused, not retransmitted');
+      if (!sawResume) {
+        final journalFiles = await Directory('${bRoot.path}/.ferrypane-resume')
+            .list(recursive: true)
+            .where((entry) => entry is File)
+            .cast<File>()
+            .toList();
+        final filesDescription = await Future.wait(journalFiles.map(
+          (file) async => '${file.path}: ${await file.length()} bytes',
+        ));
+        throw StateError('Receiver ignored saved partial prefix; '
+            'observedRestartBegin=$observedRestartBegin, '
+            'journal=$filesDescription, '
+            'senderStatus=${a2.lastMessage}, '
+            'receiverStatus=${b2.lastMessage}');
+      }
       expect(await File('${bRoot.path}/Documents/last.txt').readAsString(),
           'last');
       expect(await File('${bRoot.path}/Documents/first.txt').readAsString(),
