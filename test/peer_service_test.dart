@@ -6,6 +6,8 @@ import 'package:ferrypane/core/service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/memory_identity_store.dart';
+
 Future<void> waitForCondition(bool Function() condition) async {
   for (var n = 0; n < 200; n++) {
     if (condition()) return;
@@ -20,9 +22,9 @@ void main() {
   test('two FerryServices can upload, browse and download without disconnecting',
       () async {
     SharedPreferences.setMockInitialValues({});
-    final aIdentity = await PeerIdentity.load();
+    final aIdentity = await PeerIdentity.load(secretStore: MemoryIdentityStore());
     SharedPreferences.setMockInitialValues({});
-    final bIdentity = await PeerIdentity.load();
+    final bIdentity = await PeerIdentity.load(secretStore: MemoryIdentityStore());
     final temp = await Directory.systemTemp.createTemp('ferrypane_service_');
     final aRoot = Directory('${temp.path}/A')..createSync();
     final bRoot = Directory('${temp.path}/B')..createSync();
@@ -43,9 +45,15 @@ void main() {
       expect(a.boundPort, greaterThan(0));
       expect(b.boundPort, greaterThan(0));
 
+      b.setPairingOpen(true);
       await a.connect('ws://127.0.0.1:${b.boundPort}');
       await waitForCondition(() =>
           (a.connected?.ready ?? false) && (b.connected?.ready ?? false));
+
+      // New peers cannot write until explicitly permitted on the destination.
+      expect(b.peerCanWrite, isFalse);
+      await b.setPeerAccess(read: true, write: true);
+      await a.setPeerAccess(read: true, write: true);
 
       final initialFiles = await a.remoteList('');
       expect(initialFiles.any((x) => x.name == 'b.txt'), isTrue);

@@ -91,6 +91,21 @@ class AppLanguage {
     'IP-адрес или имя компьютера': 'IP address or computer name',
     'Подключиться': 'Connect',
     'Подключиться по IP': 'Connect by IP',
+    'Разрешить новое сопряжение на 2 минуты': 'Allow new pairing for 2 minutes',
+    'Закрыть сопряжение': 'Close pairing',
+    'Сопряжение открыто на 2 минуты': 'Pairing open for 2 minutes',
+    'Сопряжение открыто на 2 минуты. Сравните коды на обоих устройствах.':
+        'Pairing open for 2 minutes. Compare codes on both devices.',
+    'Приём новых сопряжений закрыт': 'New pairing is closed',
+    'Подключение отклонено: {reason}': 'Connection rejected: {reason}',
+    'Отключиться': 'Disconnect',
+    'Права устройства {name}': 'Permissions for {name}',
+    'Для новых сопряжений доступ на запись отключён по умолчанию. Старые разрешения сохраняются.':
+        'Newly paired devices have read-only access by default. Existing permissions are preserved.',
+    'Разрешить чтение файлов': 'Allow reading shared files',
+    'Разрешить запись файлов': 'Allow writing shared files',
+
+
     'Доступ к файлам этого устройства':
         'Share files from this device',
     'Сопряжённые устройства могут просматривать, скачивать и загружать файлы внутри выбранного каталога.':

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:convert/convert.dart';
@@ -26,6 +27,30 @@ class IncomingTransfer {
   int _chunkCounter = 0;
   final Map<String, String> _directoryAliases = {};
   final List<String> savedPaths = [];
+  static const maxFileSize = 64 * 1024 * 1024 * 1024;
+  static const maxTotalBytes = 128 * 1024 * 1024 * 1024;
+  static const maxEntries = 100000;
+  static const maxPathLength = 2048;
+  int _totalDeclared = 0;
+  int _entries = 0;
+  final Random _random = Random.secure();
+
+  void _recordEntry(String path, {int? fileSize}) {
+    if (path.length > maxPathLength || path.isEmpty) {
+      throw const FormatException('Transfer path exceeds safety limit');
+    }
+    if (++_entries > maxEntries) {
+      throw const FormatException('Too many files and directories in transfer');
+    }
+    if (fileSize != null) {
+      if (fileSize < 0 || fileSize > maxFileSize ||
+          _totalDeclared > maxTotalBytes - fileSize) {
+        throw const FormatException('Transfer size exceeds configured safety limits');
+      }
+      _totalDeclared += fileSize;
+    }
+  }
+
 
   String _destinationPath(String remoteRelative) {
     final clean = sanitizeRelative(remoteRelative);
@@ -46,6 +71,7 @@ class IncomingTransfer {
     switch (msg['type']) {
       case 'dir':
         final relative = sanitizeRelative(msg['path'] as String);
+        _recordEntry(relative);
         if (!relative.contains('/')) {
           // A second copy of a whole directory gets its own root,
           // rather than mixing renamed files into the existing folder.
@@ -59,13 +85,18 @@ class IncomingTransfer {
         break;
       case 'file_begin':
         if (_openedFile != null) throw const FormatException('Nested file_begin');
-        final path = _destinationPath(msg['path'] as String);
+        final relative = sanitizeRelative(msg['path'] as String);
+        final size = (msg['size'] as num).toInt();
+        _recordEntry(relative, fileSize: size);
+        final path = _destinationPath(relative);
         await Directory(p.dirname(path)).create(recursive: true);
         _finalPath = await _unusedName(path);
-        _temporaryPath = '${_finalPath!}.ferrypane-${DateTime.now().microsecondsSinceEpoch}.part';
+        _temporaryPath = '${_finalPath!}.ferrypane-'
+            '${_random.nextInt(1 << 32).toRadixString(16)}-'
+            '${DateTime.now().microsecondsSinceEpoch}.part';
         _openedFile = await File(_temporaryPath!).open(mode: FileMode.write);
         _received = 0;
-        _expected = (msg['size'] as num).toInt();
+        _expected = size;
         _digest = AccumulatorSink<crypto.Digest>();
         _hasher = crypto.sha256.startChunkedConversion(_digest!);
         progress('Receiving: ${msg['path']}');
