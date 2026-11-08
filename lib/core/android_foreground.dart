@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui';
 
-import 'package:flutter/widgets.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 import 'secure_peer.dart';
@@ -96,7 +95,7 @@ class AndroidForegroundAccess {
     if (!Platform.isAndroid) return;
     FlutterForegroundTask.initCommunicationPort();
     FlutterForegroundTask.init(
-      androidNotificationOptions: const AndroidNotificationOptions(
+      androidNotificationOptions: AndroidNotificationOptions(
         channelId: 'ferrypane_recovery',
         channelName: 'FerryPane — фоновый доступ',
         channelDescription: 'Приём файлов и разрешённых резервных копий '
