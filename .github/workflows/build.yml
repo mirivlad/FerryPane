@@ -112,7 +112,7 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          name: FerryPane 0.1.2 Preview
+          name: FerryPane 0.1.4 Preview
           prerelease: true
           generate_release_notes: true
           files: |

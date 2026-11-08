@@ -1,13 +1,10 @@
 package top.mirv.ferrypane
 
 import android.Manifest
-import android.content.ActivityNotFoundException
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.ContactsContract
 import android.provider.Telephony
-import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import org.json.JSONObject
 import java.io.File
@@ -80,6 +77,30 @@ class PersonalDataBridge(private val activity: FlutterActivity) {
     fun exportSms(): String {
         verifyPermission(Manifest.permission.READ_SMS)
         val result = uniqueName("sms", "json")
+        val contactCache = mutableMapOf<String, String?>()
+        fun contactName(number: String): String? {
+            if (number.isBlank() ||
+                activity.checkSelfPermission(Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+                return null
+            }
+            return contactCache.getOrPut(number) {
+                try {
+                    val uri = Uri.withAppendedPath(
+                        ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
+                        Uri.encode(number)
+                    )
+                    activity.contentResolver.query(
+                        uri,
+                        arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME),
+                        null, null, null
+                    )?.use { cursor ->
+                        if (cursor.moveToFirst()) cursor.getString(0) else null
+                    }
+                } catch (_: Exception) {
+                    null
+                }
+            }
+        }
         try {
             OutputStreamWriter(FileOutputStream(result), Charsets.UTF_8).use { output ->
                 val header = JSONObject()
@@ -102,13 +123,17 @@ class PersonalDataBridge(private val activity: FlutterActivity) {
                 cursor.use {
                     var first = true
                     while (it.moveToNext()) {
+                        val number = it.getString(0) ?: ""
                         val row = JSONObject()
-                            .put("address", it.getString(0) ?: "")
+                            .put("address", number)
                             .put("body", it.getString(1) ?: "")
                             .put("date", if (it.isNull(2)) 0L else it.getLong(2))
                             .put("dateSent", if (it.isNull(3)) 0L else it.getLong(3))
                             .put("type", if (it.isNull(4)) 0 else it.getInt(4))
                             .put("read", if (it.isNull(5)) 0 else it.getInt(5))
+                        contactName(number)?.let { name ->
+                            row.put("contactName", name)
+                        }
                         if (!first) output.write(",")
                         output.write(row.toString())
                         first = false
@@ -129,30 +154,11 @@ class PersonalDataBridge(private val activity: FlutterActivity) {
         return target.absolutePath
     }
 
-    /**
-     * Launch the phone's contacts app. It owns the import/merge workflow;
-     * we cannot claim contacts have been restored when this intent returns.
-     */
-    fun openContactsImport(path: String): String {
-        val base = File(activity.cacheDir, "ferrypane-import").canonicalFile
-        val file = File(path).canonicalFile
-        if (!file.path.startsWith(base.path + File.separator) ||
-            !file.isFile || !file.name.endsWith(".vcf", ignoreCase = true) ||
-            file.length() > 100L * 1024L * 1024L || file.length() == 0L) {
-            throw SecurityException("Некорректный файл импорта контактов")
-        }
-        val uri = FileProvider.getUriForFile(
-            activity, activity.packageName + ".fileprovider", file
-        )
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "text/x-vcard")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        try {
-            activity.startActivity(intent)
-        } catch (e: ActivityNotFoundException) {
-            throw IllegalStateException("На телефоне нет приложения импорта vCard", e)
-        }
-        return "Открыто приложение импорта контактов — подтвердите импорт в нём"
-    }
+    private val importer by lazy { ContactsImporter(activity) }
+
+    fun previewContactsImport(path: String): Map<String, Any> =
+        importer.preview(path)
+
+    fun restoreContactsImport(path: String): Map<String, Any> =
+        importer.restore(path)
 }

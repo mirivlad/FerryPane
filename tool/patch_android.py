@@ -16,6 +16,7 @@ permissions = [
     "android.permission.MANAGE_EXTERNAL_STORAGE",
     "android.permission.ACCESS_LOCAL_NETWORK",
     "android.permission.READ_CONTACTS",
+    "android.permission.WRITE_CONTACTS",
     "android.permission.READ_SMS",
 ]
 for perm in permissions:
@@ -31,30 +32,7 @@ content = re.sub(
     content,
     count=1,
 )
-# Use AndroidX FileProvider to pass an explicitly approved vCard file to
-# the phone's Contacts importer without exposing the entire app cache.
-provider = """        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.fileprovider"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/ferrypane_file_paths" />
-        </provider>
-"""
-if 'ferrypane_file_paths' not in content:
-    content = content.replace("</application>", provider + "    </application>")
 manifest.write_text(content, encoding="utf-8")
-file_paths = root / "android/app/src/main/res/xml/ferrypane_file_paths.xml"
-file_paths.parent.mkdir(parents=True, exist_ok=True)
-file_paths.write_text(
-    """<?xml version="1.0" encoding="utf-8"?>
-<paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <cache-path name="ferrypane-import" path="ferrypane-import/" />
-</paths>
-""", encoding="utf-8"
-)
 
 
 main_activity = root / "android/app/src/main/kotlin/top/mirv/ferrypane/MainActivity.kt"
@@ -103,12 +81,19 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "ferrypane/personal")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "exportContacts", "exportSms", "prepareContactsImport" -> {
+                    "exportContacts", "exportSms", "prepareContactsImport",
+                    "previewContactsImport", "restoreContactsImport" -> {
                         executor.execute {
                             try {
                                 val value = when (call.method) {
                                     "exportContacts" -> personalData.exportContacts()
                                     "exportSms" -> personalData.exportSms()
+                                    "previewContactsImport" -> personalData.previewContactsImport(
+                                        call.argument<String>("path") ?: ""
+                                    )
+                                    "restoreContactsImport" -> personalData.restoreContactsImport(
+                                        call.argument<String>("path") ?: ""
+                                    )
                                     else -> personalData.prepareContactsImport()
                                 }
                                 runOnUiThread { result.success(value) }
@@ -117,15 +102,6 @@ class MainActivity : FlutterActivity() {
                                     result.error("PERSONAL_DATA", e.message, null)
                                 }
                             }
-                        }
-                    }
-                    "openContactsImport" -> {
-                        try {
-                            result.success(
-                                personalData.openContactsImport(call.argument<String>("path") ?: "")
-                            )
-                        } catch (e: Exception) {
-                            result.error("IMPORT_ERROR", e.message, null)
                         }
                     }
                     else -> result.notImplemented()
@@ -309,6 +285,10 @@ shutil.copyfile(
     root / "tool/android/PersonalDataBridge.kt",
     root / "android/app/src/main/kotlin/top/mirv/ferrypane/PersonalDataBridge.kt",
 )
+shutil.copyfile(
+    root / "tool/android/ContactsImporter.kt",
+    root / "android/app/src/main/kotlin/top/mirv/ferrypane/ContactsImporter.kt",
+)
 print("Patched Android LAN, native contacts/SMS backup, and vCard importer")
 
 # Flutter create generates release build signing with a random runner debug
@@ -348,7 +328,10 @@ if (ferrySigningFile.exists()) {
         text,
         count=1,
     )
-    gradle.write_text(text)
-    print("Configured deterministic release signing from private key.properties")
+    if 'com.googlecode.ez-vcard:ez-vcard:' not in text:
+        text += '\n// Standard vCard 2.1/3.0/4.0 parser for in-app contact import.\n'
+        text += 'dependencies {\n    implementation("com.googlecode.ez-vcard:ez-vcard:0.12.2")\n}\n'
+    gradle.write_text(text, encoding="utf-8")
+    print("Configured deterministic release signing and Android vCard parser")
 else:
     raise RuntimeError("Flutter Android Gradle build file missing")

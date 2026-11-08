@@ -4,7 +4,7 @@
 
 One Flutter/Dart peer application runs on every supported OS. Every installation can send, receive and browse files on another. Desktop displays **two file panels**; phones switch between two panels; tablets display both when the window is wide enough.
 
-> **Status:** 0.1.3 preview / two-panel improvements and Android personal-data backups. Real-device interoperability and security review remain necessary before treating it as a stable security-sensitive product.
+> **Status:** 0.1.4 preview / repaired phone backups and in-app contact import. Real-device interoperability and security review remain necessary before treating it as a stable security-sensitive product.
 
 ## What works
 
@@ -26,7 +26,7 @@ One Flutter/Dart peer application runs on every supported OS. Every installation
 
 On the desktop, when connected to Android, the toolbar provides “Бэкап контактов”, “Бэкап SMS”, “Восстановить контакты”, and an informational “Восстановить SMS…” action.
 
-Contacts are exported as vCard files, SMS as JSON (not MMS/RCS). Importing contacts uses the stock Android importer with confirmation. SMS restoration is **not implemented** because Android limits writing to the default SMS handler.
+Contacts are exported as vCard files. SMS are saved as both **JSON** and a standalone, searchable **offline HTML conversation archive** (not MMS/RCS), inside the chosen local PC folder. The PC shows the final saved file paths only after verified transfer and refreshes its file panel. FerryPane on Android previews incoming vCard contacts, then after explicit confirmation adds missing contacts and merges missing phone numbers/email using Android ContactsProvider; it never deletes existing contacts. Photos and rare vCard attributes are not imported yet. SMS restoration is **not implemented** because Android limits writing to the default SMS handler.
 
 For unattended recovery when the display fails, **there are no per-transfer prompts on Android for downloading allowed files**. Sensitive contacts/SMS backups require a separate **one-time opt-in per already-paired desktop key**, along with any necessary Android OS permission. Users enable this while the screen works in Android sharing settings; after that, an authorized PC can download backups without on-phone confirmation as long as FerryPane remains running. Initial pairing still requires code comparison. See [Phone backup guide](docs/PHONE_BACKUP.md).
 

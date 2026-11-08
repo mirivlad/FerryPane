@@ -176,18 +176,34 @@ class _FerryHomeState extends State<FerryHome> {
   }
 
   Future<bool> _confirmContactsImport(
-      String fileName, String requester) async {
+      String fileName, String requester, Map<String, dynamic> preview) async {
     if (!mounted) return false;
     final accepted = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Восстановление контактов'),
-        content: Text(
-          'Устройство $requester передало файл $fileName. '
-          'Открыть стандартный импорт Android? '
-          'Контакты будут добавлены или объединены штатным приложением '
-          'в соответствии с выбранной учётной записью.'),
+        title: const Text('Восстановить контакты в FerryPane?'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Источник: $requester'),
+              Text('Файл: $fileName'),
+              const SizedBox(height: 12),
+              Text('Всего записей: ${preview['total']}'),
+              Text('Новых контактов: ${preview['new']}'),
+              Text('Совпадают по телефону или email: ${preview['matched']}'),
+              const SizedBox(height: 12),
+              Text(preview['details']?.toString() ?? ''),
+              const SizedBox(height: 8),
+              const Text(
+                'FerryPane не удаляет существующие контакты. '
+                'Создание записей изменит адресную книгу этого телефона.',
+              ),
+            ],
+          ),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, false),
@@ -195,7 +211,7 @@ class _FerryHomeState extends State<FerryHome> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Открыть импорт'),
+            child: const Text('Добавить и объединить'),
           ),
         ],
       ),
@@ -604,16 +620,33 @@ class _FerryHomeState extends State<FerryHome> {
             ),
           ),
           if (pane.busy) const LinearProgressIndicator(minHeight: 2),
-          if (pane.selected.isNotEmpty)
-            Row(
-              children: [
-                const SizedBox(width: 10),
-                Text('Выбрано: ${pane.selected.length}'),
-                TextButton(
-                  onPressed: () => setState(() => pane.selected.clear()),
-                  child: const Text('Снять'),
-                ),
-              ],
+          if (!disabled && pane.entries.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Row(
+                children: [
+                  Text('Выбрано: ${pane.selected.length} / ${pane.entries.length}',
+                      style: Theme.of(context).textTheme.bodySmall),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: pane.selected.length == pane.entries.length
+                        ? null
+                        : () => setState(() {
+                              pane.selected.addAll(
+                                pane.entries.map((entry) => entry.path),
+                              );
+                            }),
+                    icon: const Icon(Icons.select_all, size: 18),
+                    label: const Text('Выделить всё'),
+                  ),
+                  TextButton(
+                    onPressed: pane.selected.isEmpty
+                        ? null
+                        : () => setState(() => pane.selected.clear()),
+                    child: const Text('Снять'),
+                  ),
+                ],
+              ),
             ),
           Expanded(
             child: disabled
@@ -700,11 +733,27 @@ class _FerryHomeState extends State<FerryHome> {
       return;
     }
     try {
-      await service.requestPhoneBackup(kind, target.location);
-      _notice('Запрос отправлен. Разрешение должно быть выдано '
-          'доверенному ПК в настройках Android заранее.');
+      final files = await service.requestPhoneBackup(kind, target.location);
+      if (!mounted) return;
+      await _load(target); // Show the freshly received file(s) immediately.
+      if (!mounted) return;
+      _notice('Готово. Сохранено в ${target.location}: '
+          '${files.map(p.basename).join(', ')}');
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Резервная копия сохранена'),
+          content: SelectableText(files.join('\n')),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Закрыть'),
+            ),
+          ],
+        ),
+      );
     } catch (e) {
-      _notice('Резервное копирование: $e');
+      _notice('Не удалось создать резервную копию: $e');
     }
   }
 
@@ -719,8 +768,8 @@ class _FerryHomeState extends State<FerryHome> {
       );
       if (file == null) return;
       await service.sendContactsToPhone(file.path);
-      _notice('Контакты отправлены. На телефоне потребуется '
-          'подтвердить штатный импорт.');
+      _notice('Файл доставлен. На Android подтвердите восстановление '
+          'в окне FerryPane. Результат появится внизу окна.');
     } catch (e) {
       _notice('Восстановление контактов: $e');
     }
