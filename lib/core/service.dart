@@ -464,7 +464,7 @@ class FerryService extends ChangeNotifier {
 
   static Future<FerryService> initialize(
     Future<bool> Function(String, String, String) approval,
-    String initialRoot, {bool incomingEnabled = true},
+    String initialRoot, {bool incomingEnabled = true}
   ) async {
     final id = await PeerIdentity.load();
     final root = id.prefs.getString('ferrypane.export.root') ?? initialRoot;
