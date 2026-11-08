@@ -22,14 +22,14 @@ The original 32-byte X25519 identity seed is **not saved in plaintext SharedPref
 
 - **Windows:** Windows platform-protected application storage; available under the signed-in Windows user context (not a defence against malware executing as that user).
 - **Android:** Android Keystore-backed encrypted app storage; app-data cloud backup is disabled to avoid restoring ciphertext without matching device keys. Some Android installations/ROMs may impose additional restrictions.
-- **Linux:** Secret Service with an unlocked desktop keyring is preferred; when absent users may explicitly select password-encrypted identity file storage with PBKDF2-HMAC-SHA256 (240,000 iterations) and AES-256-GCM. The password is not saved, and the encrypted file has mode 0600 inside a 0700 directory. Missing/corrupt keys and wrong passwords fail closed. A locked existing keyring is not bypassed. `libsecret-1-0` and an **available, unlocked** keyring are required. No OS keyring, a locked keyring, or keyring failure causes FerryPane to refuse startup rather than silently save the secret as plaintext.
+- **Linux:** Secret Service with an unlocked desktop keyring is preferred. Without it, users may explicitly select password-encrypted identity file storage (PBKDF2-HMAC-SHA256 240,000 rounds, AES-256-GCM). The password is not saved and the file is protected with mode 0600 inside a 0700 directory. Corrupt or missing keys and wrong passwords fail closed. A locked existing keyring is not bypassed; no plaintext fallback.
 
 ### Upgrading from 0.1.5
 
 1. Before launching the network listener, FerryPane reads the OS secret store.
 2. If no secured identity exists, it reads the legacy `ferrypane.identity.seed` SharedPreferences value, validates that it is exactly 32 bytes, writes it into OS secure storage, reads it back, and confirms it matches.
 3. **Only after successful readback** does the program remove the legacy preference. Your original identity stays the same, so existing trusted peers and permissions are preserved. An interruption can safely retry.
-4. If OS-secure and legacy identities conflict, or the OS keyring is inaccessible, or the only identity is missing although trusted peers remain, startup **fails closed** with an error. It does not quietly reset identity or permissions.
+4. Conflicting or inaccessible identities fail closed. On a fresh Linux system without Secret Service, users can explicitly select password-encrypted file storage, but existing inaccessible trusted identity keys are never silently recreated or replaced.
 5. A password prompt may be displayed by the Linux desktop keyring when it is locked.
 
 **Residual risk:** removing a preference is not cryptographic secure erasure. Historical copies can survive in filesystem journals, snapshots or backups. An attacker who already has an old key copy may impersonate the affected device; in this case revoke the old peer and generate a new identity through a deliberate recovery procedure (not by silently removing the key).
@@ -38,7 +38,7 @@ The original 32-byte X25519 identity seed is **not saved in plaintext SharedPref
 
 ### Not the same key as APK signing
 
-The private X25519 device identity **never leaves its local OS key store as a network message**. It is distinct from FerryPane's Android APK signing certificate and from peer public identity keys. The Android release key is used only to sign packages so updates install without conflict.
+The private X25519 device identity **never leaves local protected storage as a network message**. It is distinct from FerryPane's Android APK signing certificate and from peer public identity keys. The Android release key is used only to sign packages so updates install without conflict.
 
 ## What attackers can and cannot do
 
