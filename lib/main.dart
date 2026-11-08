@@ -13,10 +13,12 @@ import 'core/service.dart';
 import 'core/personal_data.dart';
 import 'core/localization.dart';
 import 'core/reveal_file.dart';
+import 'core/android_foreground.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await AppLanguage.initialize();
+  AndroidForegroundAccess.initialize();
   runApp(const FerryPaneApp());
 }
 
@@ -83,6 +85,8 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
   String _knownConnection = '';
   String _startup = tr('Запуск…');
   bool _androidStorageGranted = !Platform.isAndroid;
+  bool _foregroundActive = false;
+  bool _changingForeground = false;
   final _ip = TextEditingController();
   Map<String, bool> _systemBackupPermissions =
       const {'contacts': false, 'sms': false};
@@ -109,6 +113,53 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && Platform.isAndroid) {
       unawaited(_refreshSystemBackupPermissions());
+      unawaited(_syncForegroundStatus());
+    }
+  }
+
+  Future<void> _syncForegroundStatus() async {
+    if (!Platform.isAndroid) return;
+    final running = await AndroidForegroundAccess.isRunning;
+    if (!mounted) return;
+    if (_foregroundActive && !running) {
+      setState(() => _foregroundActive = false);
+      await _service?.resumeIncoming();
+      _notice(tr('Фоновая служба остановилась. Обычный приём восстановлен.'));
+    }
+  }
+
+  Future<void> _setForegroundAccess(bool enabled) async {
+    final service = _service;
+    if (!Platform.isAndroid || service == null || _changingForeground) return;
+    if (enabled && (service.copyActive ||
+        service.connected?.ready == true)) {
+      _notice(tr('Завершите текущее соединение перед включением фоновой службы.'));
+      return;
+    }
+    setState(() => _changingForeground = true);
+    try {
+      if (enabled) {
+        // Never run two independent listeners on the same LAN port.
+        await service.suspendIncoming();
+        try {
+          await AndroidForegroundAccess.start();
+        } catch (_) {
+          await AndroidForegroundAccess.stop();
+          await service.resumeIncoming();
+          rethrow;
+        }
+      } else {
+        await AndroidForegroundAccess.stop();
+        await service.resumeIncoming();
+      }
+      if (mounted) setState(() => _foregroundActive = enabled);
+      _notice(enabled
+          ? tr('Фоновая служба запущена. Доступ имеют только доверенные устройства.')
+          : tr('Фоновая служба остановлена.'));
+    } catch (e) {
+      _notice(tr('Не удалось изменить фоновый доступ: {error}', {'error': e}));
+    } finally {
+      if (mounted) setState(() => _changingForeground = false);
     }
   }
 
@@ -135,7 +186,9 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
       final root = await Directory(defaultShare).exists()
           ? defaultShare
           : _initialLocal;
-      final service = await FerryService.initialize(_confirmPairing, root);
+      _foregroundActive = await AndroidForegroundAccess.isRunning;
+      final service = await FerryService.initialize(
+          _confirmPairing, root, incomingEnabled: !_foregroundActive);
       service.addListener(_serviceChanged);
       service.onContactsImportConsent = _confirmContactsImport;
       if (Platform.isAndroid) {
@@ -302,6 +355,7 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
         return;
       }
       await service.allowPeerBackup(kind, allowed);
+      AndroidForegroundAccess.refreshPermissions();
       if (mounted) updateDialog(() {});
     } catch (e) {
       _notice(tr('Не удалось изменить разрешение: {error}', {'error': e}));
@@ -523,6 +577,19 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(tr('Сопряжённые устройства могут просматривать, скачивать и загружать файлы внутри выбранного каталога.')),
+            if (Platform.isAndroid)
+              StatefulBuilder(
+                builder: (dialogContext, refresh) => SwitchListTile(
+                  dense: true,
+                  title: Text(tr('Фоновый доступ к телефону')),
+                  subtitle: Text(tr('Постоянное уведомление. Только ранее сопряжённые устройства; без новых запросов на телефоне. После перезагрузки проверьте запуск вручную.')),
+                  value: _foregroundActive,
+                  onChanged: _changingForeground ? null : (enabled) async {
+                    await _setForegroundAccess(enabled);
+                    if (dialogContext.mounted) refresh(() {});
+                  },
+                ),
+              ),
             const SizedBox(height: 14),
             Row(
               children: [
@@ -598,6 +665,7 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
                         await service.setPeerAccess(
                           read: allowed, write: service.peerCanWrite,
                         );
+                        AndroidForegroundAccess.refreshPermissions();
                         if (context.mounted) refresh(() {});
                       },
                     ),
@@ -609,6 +677,7 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
                         await service.setPeerAccess(
                           read: service.peerCanRead, write: allowed,
                         );
+                        AndroidForegroundAccess.refreshPermissions();
                         if (context.mounted) refresh(() {});
                       },
                     ),
@@ -673,6 +742,7 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
           TextButton(
             onPressed: () async {
               await service.forgetAllTrusted();
+              AndroidForegroundAccess.refreshPermissions();
               if (!context.mounted) return;
               Navigator.pop(context);
               _notice(tr('Все доверенные устройства забыты'));
@@ -689,7 +759,11 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
     );
     if (result != null) {
       try {
+        if (_foregroundActive && result != service.exportRoot) {
+          throw StateError(tr('Чтобы изменить общий каталог, сначала выключите фоновую службу.'));
+        }
         await service.setExportRoot(result);
+        AndroidForegroundAccess.refreshPermissions();
         await service.identity.rename(nameController.text.trim());
         service.scanNow();
         _notice(tr('Имя устройства и общий каталог сохранены'));
@@ -1171,10 +1245,12 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
                             .toList(),
                   ),
                 IconButton(
-                  tooltip: _service?.pairingOpen == true
+                  tooltip: _foregroundActive
+                      ? tr('Выключите фоновый доступ для нового сопряжения')
+                      : _service?.pairingOpen == true
                       ? tr('Закрыть сопряжение')
                       : tr('Разрешить новое сопряжение на 2 минуты'),
-                  onPressed: _service == null ||
+                  onPressed: _service == null || _foregroundActive ||
                           (_service!.connected?.ready ?? false)
                       ? null
                       : () {

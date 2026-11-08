@@ -452,20 +452,24 @@ class FerryService extends ChangeNotifier {
 
   final int listenPort;
   final bool enableDiscovery;
+  bool incomingEnabled;
+  bool _didRestoreJob = false;
   FerryService(this.identity, this.onPairing, this.exportRoot, {
     this.listenPort = ferryPort,
     this.enableDiscovery = true,
+    this.incomingEnabled = true,
     this.onTransferProgress,
   });
   int? get boundPort => _http?.port;
 
   static Future<FerryService> initialize(
     Future<bool> Function(String, String, String) approval,
-    String initialRoot,
+    String initialRoot, {bool incomingEnabled = true},
   ) async {
     final id = await PeerIdentity.load();
     final root = id.prefs.getString('ferrypane.export.root') ?? initialRoot;
-    final result = FerryService(id, approval, root);
+    final result = FerryService(id, approval, root,
+        incomingEnabled: incomingEnabled);
     await result.start();
     return result;
   }
@@ -477,6 +481,7 @@ class FerryService extends ChangeNotifier {
   List<String> _ipAddresses = [];
 
   Future<void> start() async {
+    if (incomingEnabled) {
     try {
       _http = await HttpServer.bind(InternetAddress.anyIPv4, listenPort, shared: true);
       broadcasting = true;
@@ -525,6 +530,7 @@ class FerryService extends ChangeNotifier {
     } catch (e) {
       _status(tr('Ошибка открытия порта {port}: {error}', {'port': ferryPort, 'error': e}));
     }
+    }
     // Previously paired devices remain selectable when broadcast discovery
     // is blocked, as can happen on some Windows firewall/Wi-Fi profiles.
     for (final key in identity.prefs.getKeys()) {
@@ -540,7 +546,37 @@ class FerryService extends ChangeNotifier {
     }
     await _refreshAddresses();
     if (enableDiscovery) await _startDiscovery();
-    await _restoreJob();
+    if (!_didRestoreJob) {
+      _didRestoreJob = true;
+      await _restoreJob();
+    }
+  }
+
+  /// Hand port 47655 and its discovery socket to the Android headless
+  /// foreground engine. The UI may still initiate its own outbound sessions.
+  Future<void> suspendIncoming() async {
+    incomingEnabled = false;
+    _beacon?.cancel();
+    _beacon = null;
+    _udp?.close();
+    _udp = null;
+    final listener = _http;
+    _http = null;
+    await listener?.close(force: true);
+    broadcasting = false;
+    if (enableDiscovery) await _startDiscovery(); // ephemeral probe socket
+    _notify();
+  }
+
+  /// Restore the regular listener after the background engine has stopped.
+  Future<void> resumeIncoming() async {
+    if (incomingEnabled && _http != null) return;
+    _beacon?.cancel();
+    _beacon = null;
+    _udp?.close();
+    _udp = null;
+    incomingEnabled = true;
+    await start();
   }
 
   Future<void> _refreshAddresses() async {
@@ -559,7 +595,7 @@ class FerryService extends ChangeNotifier {
     try {
       _udp = await RawDatagramSocket.bind(
         InternetAddress.anyIPv4,
-        discoveryPort,
+        incomingEnabled ? discoveryPort : 0,
         reuseAddress: true,
       );
       _udp!.broadcastEnabled = true;

@@ -130,15 +130,31 @@ class AndroidForegroundAccess {
     if (notifications != NotificationPermission.granted) {
       throw StateError('Разрешите уведомления для фоновой службы FerryPane');
     }
-    final result = await FlutterForegroundTask.startService(
-      serviceId: 47655,
-      serviceTypes: [ForegroundServiceTypes.connectedDevice],
-      notificationTitle: 'FerryPane',
-      notificationText: 'Фоновый доступ для доверенных устройств включён',
-      callback: ferryBackgroundCallback,
-    );
-    if (result is! ServiceRequestSuccess) {
-      throw StateError('Не удалось запустить фоновый сервис: $result');
+    // Service start is not proof the headless listener actually bound.
+    final ready = Completer<void>();
+    void onWorkerData(Object data) {
+      if (data is! Map) return;
+      if (data['state'] == 'ready' && !ready.isCompleted) {
+        ready.complete();
+      } else if (data['state'] == 'error' && !ready.isCompleted) {
+        ready.completeError(StateError(data['message'].toString()));
+      }
+    }
+    FlutterForegroundTask.addTaskDataCallback(onWorkerData);
+    try {
+      final result = await FlutterForegroundTask.startService(
+        serviceId: 47655,
+        serviceTypes: [ForegroundServiceTypes.connectedDevice],
+        notificationTitle: 'FerryPane',
+        notificationText: 'Фоновый доступ для доверенных устройств включён',
+        callback: ferryBackgroundCallback,
+      );
+      if (result is! ServiceRequestSuccess) {
+        throw StateError('Не удалось запустить фоновый сервис: $result');
+      }
+      await ready.future.timeout(const Duration(seconds: 25));
+    } finally {
+      FlutterForegroundTask.removeTaskDataCallback(onWorkerData);
     }
   }
 

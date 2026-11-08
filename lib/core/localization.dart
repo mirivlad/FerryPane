@@ -38,6 +38,15 @@ class AppLanguage {
   }
 
   static const Map<String, String> _en = {
+    'Фоновый доступ к телефону': 'Background access to this phone',
+    'Постоянное уведомление. Только ранее сопряжённые устройства; без новых запросов на телефоне. После перезагрузки проверьте запуск вручную.': 'Persistent notification. Previously paired devices only; no new prompts on the phone. Start again manually after a reboot.',
+    'Фоновая служба запущена. Доступ имеют только доверенные устройства.': 'Background service enabled. Only trusted devices can connect.',
+    'Фоновая служба остановлена.': 'Background service stopped.',
+    'Фоновая служба остановилась. Обычный приём восстановлен.': 'Background service stopped unexpectedly. Normal listening restored.',
+    'Завершите текущее соединение перед включением фоновой службы.': 'Finish the current connection before enabling background access.',
+    'Не удалось изменить фоновый доступ: {error}': 'Could not change background access: {error}',
+    'Чтобы изменить общий каталог, сначала выключите фоновую службу.': 'Disable background access before changing the shared folder.',
+    'Выключите фоновый доступ для нового сопряжения': 'Disable background access before pairing a new device',
     'Система': 'System',
     'Русский': 'Russian',
     'Английский': 'English',
