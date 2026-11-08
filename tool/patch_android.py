@@ -3,6 +3,7 @@
 from pathlib import Path
 import re
 import shutil
+import os
 
 root = Path(__file__).resolve().parent.parent
 manifest = root / "android/app/src/main/AndroidManifest.xml"
@@ -313,10 +314,24 @@ for index, line in enumerate(wrapper_lines):
         match = re.search(r"gradle-([0-9.]+)-(?:all|bin)\.zip", line)
         if not match:
             raise RuntimeError("Unrecognized generated Gradle wrapper URL")
-        wrapper_lines[index] = (
-            "distributionUrl=https\\://downloads.gradle.org/distributions/"
-            + "gradle-" + match.group(1) + "-bin.zip"
-        )
+        version = match.group(1)
+        if os.environ.get("GITHUB_ACTIONS") == "true" and version == "9.3.1":
+            # The upstream release download currently redirects to GitHub
+            # and returns 504 on Actions. Use an independent mirror only with
+            # the pinned, independently published upstream SHA-256.
+            wrapper_lines[index] = (
+                "distributionUrl=https\\://mirrors.aliyun.com/gradle/"
+                + "distributions/v9.3.1/gradle-9.3.1-bin.zip"
+            )
+            wrapper_lines.append(
+                "distributionSha256Sum="
+                + "b266d5ff6b90eada6dc3b20cb090e3731302e553a27c5d3e4df1f0d76beaff06"
+            )
+        else:
+            wrapper_lines[index] = (
+                "distributionUrl=https\\://downloads.gradle.org/distributions/"
+                + "gradle-" + version + "-bin.zip"
+            )
         found_wrapper = True
 if not found_wrapper:
     raise RuntimeError("Generated Gradle wrapper has no distributionUrl")
