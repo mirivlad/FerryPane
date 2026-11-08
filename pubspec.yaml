@@ -1,7 +1,7 @@
 name: ferrypane
 description: Local-first peer-to-peer file manager for Windows, Linux and Android.
 publish_to: none
-version: 0.2.0+11
+version: 0.2.1+12
 
 environment:
   sdk: '>=3.5.0 <4.0.0'

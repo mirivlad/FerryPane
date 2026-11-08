@@ -1,6 +1,13 @@
 # FerryPane roadmap
 
-**Current state: v0.2.0 (November 2026).** The GitHub release artifacts are useful for LAN file transfers, but security-sensitive and Android recovery functions still need real-device validation. Items below distinguish implemented work from planned work.
+**Current state: v0.2.1 (November 2026).** The GitHub release artifacts are useful for LAN file transfers, but security-sensitive and Android recovery functions still need real-device validation. Items below distinguish implemented work from planned work.
+
+## Security hardening in 0.2.1
+
+- [x] Fail-closed missing read/write grants, separate destructive grant and receiver journal.
+- [x] Explicit Linux password-encrypted identity fallback with no plaintext key storage.
+- [x] Ephemeral anonymous discovery, exclusive Windows port bind, Android source cleanup.
+- [ ] External security audit and complete real-device Android background acceptance.
 
 ## Implemented
 

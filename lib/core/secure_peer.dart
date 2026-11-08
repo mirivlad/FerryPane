@@ -67,11 +67,14 @@ class PeerIdentity {
   bool trusts(String remoteKey) => prefs.getString('trusted.$remoteKey') != null;
 
   Future<void> trust(String remoteKey, String name) async {
-    // Existing users keep their original permissions when upgrading.
-    // Freshly paired devices get read-only access by default; writable
-    // access must be explicitly enabled by the receiving device's owner.
+    // Missing permissions always deny, including after profile migrations.
+    // New peers get explicit read-only grants; modifying or deleting files
+    // must be separately enabled on the receiving device.
     if (!trusts(remoteKey)) {
-      if (!await prefs.setBool('access.write.$remoteKey', false)) {
+      // Persist explicit grants BEFORE trust; missing keys always deny.
+      if (!await prefs.setBool('access.read.$remoteKey', true) ||
+          !await prefs.setBool('access.write.$remoteKey', false) ||
+          !await prefs.setBool('access.manage.$remoteKey', false)) {
         throw StateError('Could not save new device access permissions');
       }
     }

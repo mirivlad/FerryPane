@@ -6,14 +6,24 @@ FerryPane connects two devices on a local network and lets you browse, select an
 
 **Русская документация:** [README.ru.md](docs/README.ru.md).
 
-> **Current status: 0.2.0.** Full local and remote file operations are available. This is a regular release, but not independently security-audited or exhaustively tested on real Android devices. File transfers, recovery of contacts and SMS archives should still be tested on your devices. Android foreground recovery is opt-in and requires real-device acceptance; Android may stop services under battery, VPN or manufacturer policies.
+> **Current status: 0.2.1.** Full local and remote file operations are available. This is a regular release, but not independently security-audited or exhaustively tested on real Android devices. File transfers, recovery of contacts and SMS archives should still be tested on your devices. Android foreground recovery is opt-in and requires real-device acceptance; Android may stop services under battery, VPN or manufacturer policies.
 
 ## Highlights
 
 - **Two file panels.** Switch either panel between local and remote files, navigate with `..`, select individual files, directories or **Select all** (folders are copied recursively).
+- **Separate permission for destructive operations (0.2.1).** Remote deletion,
+  rename, move and replacement require an explicit per-device grant, independent
+  of ordinary read/write. Missing permissions never allow access. Receiver-side
+  file operation history is available in Settings. Remote deletion is permanent:
+  keep backups of irreplaceable data.
+- **Privacy-aware discovery.** Local discovery uses temporary random tokens,
+  not the configured device name or persistent public key.
+- **Minimal Linux support.** If no Secret Service keyring is available, explicitly
+  select a password-encrypted file for the identity key. No plaintext fallback:
+  password is needed after restart, and existing locked keyrings are not bypassed.
 - **Real file manager (0.2.0).** Create, rename and delete files/folders on either device, copy or move inside one device, and use cut/copy/paste. Destructive deletion requires confirmation; name conflicts offer skip, keep both or replace. Browse file size and modification time, sort and search nested folders (bounded scan). Remote mutations require explicit write permission. Cross-device moves use a verified two-phase operation: complete transfer, compare SHA-256 manifests at both ends, then conditionally delete unchanged originals. If anything fails, originals remain.
 - **Works without the Internet.** Connect via ordinary Wi-Fi, Ethernet or a phone hotspot. Find peers on private IPv4 subnets, or enter an IP address manually. VPN policies and firewalls may restrict discovery.
-- **Pair once.** On the receiving device explicitly open the lock icon's two-minute pairing window; then connect from the sender and compare the six-digit code on **both** devices. New peers get read-only shared-folder access; enable writing on the receiving device if needed. Trusted identities are remembered and the protocol v5 session encrypts data with transcript-bound X25519/HKDF/AES-GCM. **Both ends must run 0.2.0 (protocol v5); older versions do not connect.**
+- **Pair once.** On the receiving device explicitly open the lock icon's two-minute pairing window; then connect from the sender and compare the six-digit code on **both** devices. New peers get read-only shared-folder access; enable writing on the receiving device if needed. Trusted identities are remembered and the protocol v5 session encrypts data with transcript-bound X25519/HKDF/AES-GCM. **Both ends must run 0.2.0 or newer (protocol v5); older versions do not connect.**
 - **Streaming transfer with real resumption.** Many small files share one encrypted connection. Interrupted ordinary file copies retain verified prefixes in a hidden destination-side journal and can restart from the last checked offset. Already completed matching files are skipped; revised source files receive a new name instead of replacing the old copy. Full SHA-256 is verified before a file becomes visible.
 - **Automatic recovery and control.** FerryPane remembers one unfinished user-initiated copy (selection, target and trusted peer), attempts bounded automatic reconnects, and can continue after the application is restarted. Current-file progress, speed and ETA are visible; Pause / Resume / Cancel operate without another pairing. On Android, an optional, visibly notified foreground service can accept previously trusted peers when the UI is closed; Android can still terminate the service.
 - **Android opt-in foreground service (0.1.8).** Enable **Background access to this phone** in Settings while the phone is working. It runs a visible notification and serves only already paired peers, with existing file and personal-data permissions. Disable it from Settings; new pairing requires the interactive UI. Background access is not guaranteed after reboot, force-stop, Doze, VPN lockdown or vendor battery restrictions.
@@ -54,7 +64,7 @@ The original copy request is stored on the requesting device for recovery after 
 
 The hidden resume directory is internal state and is not offered to remote file browsers. Do not manually delete it during an active or resumable operation. Old aborted jobs can leave staged bytes until cleaned up; automatic background garbage collection is not implemented yet. Android contacts/SMS backups and contact imports remain separate, consent-protected operations and are not automatically retried as resumable file copies.
 
-**Compatibility:** protocol v5 requires **v0.2.0 on both devices**. Earlier versions are intentionally incompatible; upgrade both clients. Existing trust keys and settings are preserved when available.
+**Compatibility:** protocol v5 requires **v0.2.0 or newer on both devices**. Earlier versions are intentionally incompatible; upgrade both clients. Existing trust keys and settings are preserved when available.
 
 
 ## Phone contacts and SMS
@@ -96,7 +106,7 @@ flutter build linux --release   # on Linux
 flutter build windows --release # on Windows
 ```
 
-**Security upgrade in 0.1.6:** the private X25519 identity seed moves from plaintext SharedPreferences into the OS secure store (Android Keystore, Windows protected storage, Linux Secret Service) on first launch. The existing key is verified before deleting the legacy setting; your paired devices should remain paired. If the keyring cannot be opened, the application refuses to start instead of reverting to plaintext. Do not downgrade to 0.1.5 after migration: that version cannot read the new secure identity. The original plaintext might still persist in old backups/snapshots. See [Security model](docs/SECURITY.md).
+**Security upgrade in 0.1.6:** the private X25519 identity seed moves from plaintext SharedPreferences into the OS secure store (Android Keystore, Windows protected storage, Linux Secret Service) on first launch. The existing key is verified before deleting the legacy setting; your paired devices should remain paired. If Linux Secret Service is absent, the user can explicitly select a password-encrypted identity file; inaccessible existing identities are never silently replaced, and plaintext fallback is forbidden. Do not downgrade to 0.1.5 after migration: that version cannot read the new secure identity. The original plaintext might still persist in old backups/snapshots. See [Security model](docs/SECURITY.md).
 
 The platform projects are created by Flutter on the build machine; Android-specific permissions and native code are applied by `tool/patch_android.py`. Do not publish `flutter build apk --release` with the generated debug signing key; tagged CI releases require the permanent signing secrets documented in [SIGNING.md](docs/SIGNING.md).
 

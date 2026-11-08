@@ -1,6 +1,6 @@
 # FerryPane architecture
 
-This file describes the **implementation in v0.1.6 Preview**, not just an aspirational design. The project began in November 2026.
+This file describes the **implementation in v0.2.1**, not just an aspirational design. The project began in November 2026.
 
 ## Runtime model
 
@@ -18,7 +18,7 @@ FerryPane is one **Flutter/Dart** peer application on Windows, Linux and Android
                     * WebSocket with application-layer AES-GCM
 ```
 
-The actual LAN socket uses **`ws://`** with a separate mutually paired, encrypted application session; it is **not TLS WSS yet**. The original internet-hub architecture envisages WSS, but this is deferred. The v3 handshake uses persistent X25519 identity keys (stored in OS protected storage after migration), temporary X25519 keys, a role-ordered hello transcript bound to HKDF-SHA256 and AES-256-GCM. The receiving device must enable a two-minute pairing window for new peers; new peers start with read-only file access. Peers compare a six-digit short authentication code on **both devices** when first pairing. Trust persists in the application's local preferences. This is a custom protocol that **has not been externally audited**; it is not a substitute for a standard audited protocol on hostile networks.
+The actual LAN socket uses **`ws://`** with a separate mutually paired, encrypted application session; it is **not TLS WSS yet**. The original internet-hub architecture envisages WSS, but this is deferred. The v5 handshake uses persistent X25519 identity keys (stored in OS protected storage or the explicitly selected Linux encrypted file), temporary X25519 keys, a role-ordered hello transcript bound to HKDF-SHA256 and AES-256-GCM. The receiving device must enable a two-minute pairing window for new peers; new peers start with read-only file access. Peers compare a six-digit short authentication code on **both devices** when first pairing. Trust persists in the application's local preferences. This is a custom protocol that **has not been externally audited**; it is not a substitute for a standard audited protocol on hostile networks.
 
 ## Discovery and network routing
 
@@ -37,13 +37,13 @@ Android VPN lockdown can prevent direct physical-network sockets, and FerryPane 
 - Directory entries are streamed recursively; no full in-memory manifest is required.
 - Paths are relative to the receiver's permitted root. Absolute paths, traversal and symbolic-link paths are rejected.
 - Incoming content is written to temporary files, checked using SHA-256, then finalized. Conflicting filenames/folders get unique suffixes rather than overwriting.
-- Multiple concurrent peers, transfer queue, resume, sync, remote delete/move and cancellation are **not implemented**.
+- Multi-peer sessions and directory synchronization are not implemented. Resume, pause/cancel and remote delete/move were added in 0.1.7/0.2.0. Version 0.2.1 adds a separate remote destructive grant and receiver journal.
 
 Local copy paths and export roots are constrained by the operating system. For Android, All-files access does not include application-private data or all restricted directories.
 
 ## Personal-data backup and contact import
 
-Android Kotlin code (under `tool/android/`) provides a `MethodChannel` bridge:
+Android Kotlin code (under `packages/ferrypane_native/android/src/main/kotlin/top/mirv/ferrypane/`) provides a `MethodChannel` bridge:
 
 - **Contacts export:** read Android ContactsProvider with `READ_CONTACTS`, serialize as vCard `.vcf` in a private temporary folder, transfer to the requesting trusted desktop and remove the temporary copy.
 - **SMS export:** read Android Telephony.Sms with `READ_SMS`; produce `ferrypane.sms.v1` JSON with timestamps, direction and optional contact names. On the PC, Dart generates a **self-contained HTML viewer** with embedded Base64 data, local search and `textContent` rendering to prevent SMS text becoming executable markup. No MMS, RCS or deleted messages.
