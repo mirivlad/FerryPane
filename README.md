@@ -6,13 +6,13 @@ FerryPane connects two devices on a local network and lets you browse, select an
 
 **Русская документация:** [README.ru.md](docs/README.ru.md).
 
-> **Current status: 0.1.5 Preview.** This is a functional preview, not a security-audited production release. File transfers, recovery of contacts and SMS archives should still be tested on your devices. Android background recovery is not yet implemented.
+> **Current status: 0.1.6 Preview.** This is a functional preview, not a security-audited production release. File transfers, recovery of contacts and SMS archives should still be tested on your devices. Android background recovery is not yet implemented.
 
 ## Highlights
 
 - **Two file panels.** Switch either panel between local and remote files, navigate with `..`, select individual files, directories or **Select all** (folders are copied recursively).
 - **Works without the Internet.** Connect via ordinary Wi-Fi, Ethernet or a phone hotspot. Find peers on private IPv4 subnets, or enter an IP address manually. VPN policies and firewalls may restrict discovery.
-- **Pair once.** Compare the six-digit confirmation code on **both** devices. Trusted peer keys are remembered; communication uses X25519 key agreement, HKDF-SHA256 and AES-256-GCM application-frame encryption.
+- **Pair once.** On the receiving device explicitly open the lock icon's two-minute pairing window; then connect from the sender and compare the six-digit code on **both** devices. New peers get read-only shared-folder access; enable writing on the receiving device if needed. Trusted identities are remembered and the protocol v3 session encrypts data with transcript-bound X25519/HKDF/AES-GCM. **Both ends must run 0.1.6.**
 - **One continuous transfer.** Small files are streamed in batches rather than requiring a separate network connection for each file. Incoming files are SHA-256 checked before commit. Existing names receive a suffix instead of being silently overwritten.
 - **Phone backups.** Export Android contacts to `.vcf` and SMS to both structured `.json` and a standalone, searchable, offline `.html` conversation viewer. The desktop reveals the saved file in the file manager.
 - **Restore contacts in FerryPane.** Send a `.vcf` from PC to a functioning Android phone; review new/matched counts, confirm and merge using Android ContactsProvider. Existing contacts are not deleted. Some advanced vCard fields (photos and less common attributes) are not restored.
@@ -38,8 +38,8 @@ The Windows EXE installer installs to the current user's `%LOCALAPPDATA%\Program
 1. Launch FerryPane on both devices and connect them to the same LAN or hotspot.
 2. Review the **Shared folder** and **Device name** in Settings. Remote devices can access only the configured shared folder, subject to Android filesystem limits.
 3. Choose a device from the discovery menu, or use **Connect by IP**. Firewalls may require inbound TCP **47655** and UDP **47656** on private networks.
-4. Compare the six-digit pairing codes shown on **both** screens. Only accept if they match.
-5. Select **Local** or **Remote** independently in either panel. Browse directories, tick files/folders or choose **Select all**, then click the appropriate *Left → Right* or *Right → Left* button.
+4. **For a first connection**, tap the closed-padlock icon on the **receiver** to open pairing for two minutes; then connect from the other device. Compare the six-digit codes on **both** screens. Only accept if they match. If reconnecting an existing trusted device, the pairing window is not needed.
+5. Select **Local** or **Remote** independently in either panel. Browse directories, tick files/folders or choose **Select all**, then click the appropriate *Left → Right* or *Right → Left* button. **For a new peer, enable write access in the destination device's Settings** before uploading files; previously paired devices keep their original rights.
 
 For local network discovery under VPNs such as NaiveProxy, FerryPane tries each suitable private IPv4 interface. Android VPN lockdown may still prohibit bypassing the tunnel. This is an Android/VPN policy, not an authorization FerryPane attempts to override.
 
@@ -71,7 +71,7 @@ More details: [Phone backups and permissions](docs/PHONE_BACKUP.md).
 
 ## Build and develop
 
-Requires [Flutter stable](https://docs.flutter.dev/get-started/install) with the corresponding desktop/Android toolchain. Linux additionally needs GTK3 development libraries; Android requires SDK/JDK 17.
+Requires [Flutter stable](https://docs.flutter.dev/get-started/install) with the corresponding desktop/Android toolchain. Linux additionally needs GTK3 development libraries, `libsecret-1-dev` and a running, unlocked desktop Secret Service; Android requires SDK/JDK 17.
 
 ```bash
 bash tool/prepare_platforms.sh
@@ -81,12 +81,15 @@ flutter build linux --release   # on Linux
 flutter build windows --release # on Windows
 ```
 
+**Security upgrade in 0.1.6:** the private X25519 identity seed moves from plaintext SharedPreferences into the OS secure store (Android Keystore, Windows protected storage, Linux Secret Service) on first launch. The existing key is verified before deleting the legacy setting; your paired devices should remain paired. If the keyring cannot be opened, the application refuses to start instead of reverting to plaintext. Do not downgrade to 0.1.5 after migration: that version cannot read the new secure identity. The original plaintext might still persist in old backups/snapshots. See [Security model](docs/SECURITY.md).
+
 The platform projects are created by Flutter on the build machine; Android-specific permissions and native code are applied by `tool/patch_android.py`. Do not publish `flutter build apk --release` with the generated debug signing key; tagged CI releases require the permanent signing secrets documented in [SIGNING.md](docs/SIGNING.md).
 
 The CI also creates `.deb` with `tool/build_deb.sh` and a per-user NSIS Windows installer with `tool/windows/FerryPane.nsi`. Pull-request builds validate all platforms; version tags publish the five release artifacts.
 
 ## Project and contributing
 
+- [Security model and threat boundaries](docs/SECURITY.md)
 - [Architecture and current implementation](docs/ARCHITECTURE.md)
 - [Roadmap and deferred features](docs/ROADMAP.md)
 - [Android backups and restoration](docs/PHONE_BACKUP.md)

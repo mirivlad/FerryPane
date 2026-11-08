@@ -1,6 +1,6 @@
 # FerryPane roadmap
 
-**Current state: v0.1.5 Preview (November 2026).** The GitHub release artifacts are useful for LAN file transfers, but security-sensitive and Android recovery functions still need real-device validation. Items below distinguish implemented work from planned work.
+**Current state: v0.1.6 Preview (November 2026).** The GitHub release artifacts are useful for LAN file transfers, but security-sensitive and Android recovery functions still need real-device validation. Items below distinguish implemented work from planned work.
 
 ## Implemented in preview releases
 
@@ -12,6 +12,9 @@
 - [x] User-selected shared export directory (desktop native folder picker).
 - [x] Android contacts export to vCard and SMS export to JSON + standalone offline HTML viewer (subject to Android permissions).
 - [x] In-app contact import/merge on Android after explicit preview/approval (common fields only; real-device acceptance still pending).
+- [x] First pairing window closed by default, with a two-minute manual authorization window, and safeguards preventing untrusted clients from displacing an active session.
+- [x] OS-protected identity seed with verified migration from pre-0.1.6 plaintext preferences, preserving prior device identities.
+- [x] Protocol v3 with transcript-bound HKDF/SAS, per-peer read/write permissions, local-address connection restrictions, handshake timeouts and resource limits.
 - [x] Persistent Android APK signing identity for updates since v0.1.2.
 - [x] Russian/English GUI with System language selection.
 - [x] Windows portable ZIP and EXE installer; Linux TAR.GZ and DEB installer; Android APK.

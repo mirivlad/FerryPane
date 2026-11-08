@@ -2,6 +2,17 @@
 
 All versions are development previews until the project has passed the device and security acceptance criteria.
 
+## 0.1.6 Preview
+
+- Migrated existing device identity seeds into OS-protected storage (Windows protected storage, Android Keystore, Linux Secret Service), with verified readback and fail-closed recovery of legacy identity/trust.
+- First pairing is now closed by default; the receiver must open a visible two-minute pairing window. Added explicit disconnect control.
+- New pending connections no longer displace active sessions. Added local-address restrictions, per-source connection throttling, handshake timeouts and frame-size limits.
+- Protocol v3 includes ordered handshake transcripts in session key derivation; identity trust is saved only after encrypted ready confirmation. Both sides must upgrade; paired device identities are retained.
+- Newly paired peers have read-only access by default; the owner can separately grant read/write, while previously trusted peers preserve their old permissions.
+- Hardened transfer paths, entry count and declared size limits; disabled Android automatic app-data cloud backup for Keystore consistency.
+- Added migration/session-isolation tests and published a security threat model in `docs/SECURITY.md`.
+- This is not a third-party security audit; Linux requires an available, unlocked Secret Service keyring.
+
 ## 0.1.5 Preview
 
 - **Permissions:** Android settings show actual platform-granted contacts/SMS access instead of treating stored FerryPane grants as proof that the OS permission is still active. Revoked permissions can be requested again; settings provide an explicit refresh.
