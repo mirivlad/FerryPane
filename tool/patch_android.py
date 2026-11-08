@@ -2,6 +2,7 @@
 """Patch generated Flutter Android project for LAN discovery and secure builds."""
 from pathlib import Path
 import re
+import shutil
 
 root = Path(__file__).resolve().parent.parent
 manifest = root / "android/app/src/main/AndroidManifest.xml"
@@ -14,6 +15,8 @@ permissions = [
     "android.permission.CHANGE_WIFI_MULTICAST_STATE",
     "android.permission.MANAGE_EXTERNAL_STORAGE",
     "android.permission.ACCESS_LOCAL_NETWORK",
+    "android.permission.READ_CONTACTS",
+    "android.permission.READ_SMS",
 ]
 for perm in permissions:
     if f'android:name="{perm}"' not in content:
@@ -28,7 +31,31 @@ content = re.sub(
     content,
     count=1,
 )
-manifest.write_text(content)
+# Use AndroidX FileProvider to pass an explicitly approved vCard file to
+# the phone's Contacts importer without exposing the entire app cache.
+provider = """        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/ferrypane_file_paths" />
+        </provider>
+"""
+if 'ferrypane_file_paths' not in content:
+    content = content.replace("</application>", provider + "    </application>")
+manifest.write_text(content, encoding="utf-8")
+file_paths = root / "android/app/src/main/res/xml/ferrypane_file_paths.xml"
+file_paths.parent.mkdir(parents=True, exist_ok=True)
+file_paths.write_text(
+    """<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="ferrypane-import" path="ferrypane-import/" />
+</paths>
+""", encoding="utf-8"
+)
+
 
 main_activity = root / "android/app/src/main/kotlin/top/mirv/ferrypane/MainActivity.kt"
 main_activity.parent.mkdir(parents=True, exist_ok=True)
@@ -53,6 +80,7 @@ import java.net.SocketTimeoutException
 import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
+    private val personalData by lazy { PersonalDataBridge(this) }
     private var multicastLock: WifiManager.MulticastLock? = null
     private val executor = Executors.newSingleThreadExecutor()
     private val connectivity by lazy {
@@ -70,6 +98,38 @@ class MainActivity : FlutterActivity() {
                         if (model.startsWith(manufacturer, true)) model else "$manufacturer $model"
                     )
                 } else result.notImplemented()
+            }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "ferrypane/personal")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "exportContacts", "exportSms", "prepareContactsImport" -> {
+                        executor.execute {
+                            try {
+                                val value = when (call.method) {
+                                    "exportContacts" -> personalData.exportContacts()
+                                    "exportSms" -> personalData.exportSms()
+                                    else -> personalData.prepareContactsImport()
+                                }
+                                runOnUiThread { result.success(value) }
+                            } catch (e: Exception) {
+                                runOnUiThread {
+                                    result.error("PERSONAL_DATA", e.message, null)
+                                }
+                            }
+                        }
+                    }
+                    "openContactsImport" -> {
+                        try {
+                            result.success(
+                                personalData.openContactsImport(call.argument<String>("path") ?: "")
+                            )
+                        } catch (e: Exception) {
+                            result.error("IMPORT_ERROR", e.message, null)
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
             }
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "ferrypane/network")
@@ -245,7 +305,11 @@ class MainActivity : FlutterActivity() {
     }
 }
 ''', encoding="utf-8")
-print("Patched Android LAN permissions, network selection and model name")
+shutil.copyfile(
+    root / "tool/android/PersonalDataBridge.kt",
+    root / "android/app/src/main/kotlin/top/mirv/ferrypane/PersonalDataBridge.kt",
+)
+print("Patched Android LAN, native contacts/SMS backup, and vCard importer")
 
 # Flutter create generates release build signing with a random runner debug
 # key. Never distribute that unstable identity as a release.
