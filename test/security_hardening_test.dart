@@ -158,6 +158,16 @@ void main() {
       final statusLine = utf8.decode(responseBytes).split('\r\n').first;
       expect(statusLine, contains('409'));
       probe.destroy();
+      final browser = await Socket.connect('127.0.0.1', bob.boundPort!);
+      browser.write('GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n'
+          'Origin: https://untrusted.example\r\n'
+          'Connection: close\r\n\r\n');
+      final browserResponse = await browser.first.timeout(
+        const Duration(seconds: 5),
+      );
+      expect(utf8.decode(browserResponse).split('\r\n').first,
+          contains('403'));
+      browser.destroy();
       expect(alice.connected?.ready, isTrue);
       expect(bob.connected?.ready, isTrue);
       expect(bob.connected?.remoteKey, aliceIdentity.publicString);

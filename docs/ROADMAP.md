@@ -22,6 +22,8 @@
 
 ## Near-term priorities
 
+Preview.2 includes operation ID matching, transfer-slot reservation for Android backups, an idle transfer watchdog, Windows destination-name checks and checksums. Future work on filesystem-race confinement, old orphaned .part cleanup and independent signed release provenance remains open; these are not claimed complete.
+
 1. **Device acceptance:** test Windows 10/11, Debian/Ubuntu, common Android vendors with and without VPN, Wi-Fi hotspot, mixed file trees and real permissions (including automatically revoked Android grants).
 2. **Reliable Android background service:** explicit, opt-in foreground notification/service and realistic screen-off/process-restart behavior for a phone paired in advance. Do not promise recovery after shutdown, new pairing on a broken screen or override of OS security.
 3. **Contact import quality:** test vCard 2.1/3.0/4.0, country codes, multiple accounts and contact properties; avoid incorrect merges and import duplicates; offer clearer dry-run details and selective import.

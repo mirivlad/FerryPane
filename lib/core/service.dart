@@ -96,7 +96,54 @@ class FerryService extends ChangeNotifier {
   }
 
   IncomingTransfer? _incoming;
+  Timer? _incomingIdleTimer;
+
+  /// A stalled sender must not leave a .part file open indefinitely. This
+  /// checks actual data/protocol progress, not transfer duration or file size,
+  /// so large legitimate copies remain unlimited in overall duration.
+  void _setIncoming(IncomingTransfer? transfer) {
+    _incoming = transfer;
+    _touchIncoming();
+  }
+
+  void _touchIncoming() {
+    _incomingIdleTimer?.cancel();
+    final transfer = _incoming;
+    if (transfer == null) return;
+    _incomingIdleTimer = Timer(const Duration(minutes: 5), () {
+      if (_incoming != transfer) return;
+      _incomingIdleTimer = null;
+      _incoming = null;
+      _discardingTransfer = true;
+      _contactsImportDir = null;
+      _contactsImportName = null;
+      final error = StateError('Передача прервана: 5 минут без данных');
+      final waiting = _personalBackupWaiter;
+      if (_personalBackupId == transfer.transferId &&
+          waiting != null && !waiting.isCompleted) {
+        waiting.completeError(error);
+      }
+      _status('$error');
+      unawaited(() async {
+        try {
+          await transfer.abort();
+        } catch (_) {}
+        final peer = connected;
+        if (peer != null && peer.ready) {
+          try {
+            await peer.sendJson({
+              'type': 'error',
+              'transferId': transfer.transferId,
+              'message': '$error',
+            });
+          } catch (_) {}
+        }
+      }());
+    });
+  }
+
   Completer<List<FileEntry>>? _listRequest;
+  int? _pendingListId;
   final FlowAcknowledgements _flowAcks = FlowAcknowledgements();
   Completer<void>? _transferComplete;
   Completer<List<String>>? _personalBackupWaiter;
@@ -148,6 +195,15 @@ class FerryService extends ChangeNotifier {
       _http!.listen((request) async {
         final source = request.connectionInfo?.remoteAddress.address ?? '';
         if (!isAllowedSource(source)) {
+          request.response.statusCode = HttpStatus.forbidden;
+          await request.response.close();
+          return;
+        }
+        // Browser-origin WebSocket calls have no purpose in the native
+        // FerryPane protocol. Refusing them prevents a webpage from tying up
+        // the pending-pairing slot on localhost or another private interface.
+        // dart:io native clients do not send an Origin header by default.
+        if (request.headers[HttpHeaders.originHeader]?.isNotEmpty == true) {
           request.response.statusCode = HttpStatus.forbidden;
           await request.response.close();
           return;
@@ -413,12 +469,13 @@ class FerryService extends ChangeNotifier {
         }
         if (connected == peer) {
           _incoming?.abort();
-          _incoming = null;
+          _setIncoming(null);
           _contactsImportDir = null;
           _contactsImportName = null;
           _discardingTransfer = false;
           _listRequest?.completeError(StateError('Disconnected: $reason'));
           _listRequest = null;
+          _pendingListId = null;
           _flowAcks.cancel(StateError('Disconnected: $reason'));
           final completed = _transferComplete;
           if (completed != null && !completed.isCompleted) {
@@ -558,13 +615,21 @@ class FerryService extends ChangeNotifier {
     if (peer == null || !peer.ready) throw StateError('No connected device');
     if (_listRequest != null) throw StateError('Directory listing already in progress');
     final request = Completer<List<FileEntry>>();
-    _listRequest = request;
     final id = ++_nextId;
-    await peer.sendJson({'type': 'list', 'id': id, 'path': sanitizeRelative(path)});
+    _listRequest = request;
+    _pendingListId = id;
     try {
+      await peer.sendJson({
+        'type': 'list',
+        'id': id,
+        'path': sanitizeRelative(path),
+      });
       return await request.future.timeout(const Duration(seconds: 20));
     } finally {
-      if (_listRequest == request) _listRequest = null;
+      if (_listRequest == request) {
+        _listRequest = null;
+        _pendingListId = null;
+      }
     }
   }
 
@@ -575,7 +640,7 @@ class FerryService extends ChangeNotifier {
     await Directory(localDirectory).create(recursive: true);
     final transferId = _newTransferId();
     _discardingTransfer = false;
-    _incoming = IncomingTransfer(localDirectory, _status, transferId);
+    _setIncoming(IncomingTransfer(localDirectory, _status, transferId));
     try {
       await peer.sendJson({
         'type': 'download',
@@ -585,7 +650,7 @@ class FerryService extends ChangeNotifier {
       _status(tr('Загрузка {count} объектов', {'count': remotePaths.length}));
     } catch (_) {
       await _incoming?.abort();
-      _incoming = null;
+      _setIncoming(null);
       rethrow;
     }
   }
@@ -609,7 +674,7 @@ class FerryService extends ChangeNotifier {
     final transferId = _newTransferId();
     final waiter = Completer<List<String>>();
     _discardingTransfer = false;
-    _incoming = IncomingTransfer(localDirectory, _status, transferId);
+    _setIncoming(IncomingTransfer(localDirectory, _status, transferId));
     _personalBackupWaiter = waiter;
     _personalBackupId = transferId;
     _personalBackupKind = kind;
@@ -624,7 +689,7 @@ class FerryService extends ChangeNotifier {
     } catch (e) {
       _status(tr('Резервное копирование не выполнено: {error}', {'error': e}));
       await _incoming?.abort();
-      _incoming = null;
+      _setIncoming(null);
       rethrow;
     } finally {
       if (_personalBackupWaiter == waiter) {
@@ -735,7 +800,10 @@ class FerryService extends ChangeNotifier {
           break;
         case 'list_result':
           final request = _listRequest;
-          if (request != null && !request.isCompleted) {
+          // Old, duplicated, or unsolicited results must not complete a
+          // newer folder listing. This is especially important after timeouts.
+          if (msg['id'] == _pendingListId &&
+              request != null && !request.isCompleted) {
             request.complete(
               (msg['entries'] as List)
                   .map((e) => FileEntry.fromJson(Map<String, dynamic>.from(e as Map)))
@@ -744,31 +812,49 @@ class FerryService extends ChangeNotifier {
           }
           break;
         case 'error':
+          final reason = StateError(
+            msg['message'] is String
+                ? msg['message'] as String
+                : 'Remote operation failed',
+          );
+          final transferId = msg['transferId'];
+          final requestId = msg['id'];
+          var handled = false;
+
+          final request = _listRequest;
+          if (requestId != null && requestId == _pendingListId &&
+              request != null && !request.isCompleted) {
+            request.completeError(reason);
+            handled = true;
+          }
           final pendingBackup = _personalBackupWaiter;
-          if (pendingBackup != null && !pendingBackup.isCompleted &&
-              (msg['transferId'] == null ||
-                  msg['transferId'] == _personalBackupId)) {
-            pendingBackup.completeError(
-              StateError('Телефон: ${msg['message']}'),
-            );
+          if (transferId != null && transferId == _personalBackupId &&
+              pendingBackup != null && !pendingBackup.isCompleted) {
+            pendingBackup.completeError(reason);
+            handled = true;
           }
           final outgoing = _transferComplete;
-          if (outgoing != null && !outgoing.isCompleted) {
-            outgoing.completeError(StateError(msg['message'] as String));
+          if (transferId != null && transferId == _outgoingTransferId &&
+              outgoing != null && !outgoing.isCompleted) {
+            outgoing.completeError(reason);
+            _flowAcks.cancel(reason);
+            handled = true;
           }
-          if (_incoming != null) {
-            await _incoming!.abort();
-            _incoming = null;
+          final incoming = _incoming;
+          if (transferId != null && incoming != null &&
+              transferId == incoming.transferId) {
+            await incoming.abort();
+            _setIncoming(null);
             _discardingTransfer = true;
             _contactsImportDir = null;
             _contactsImportName = null;
+            handled = true;
           }
-          _flowAcks.cancel(StateError(msg['message'] as String));
-          final request = _listRequest;
-          if (request != null && !request.isCompleted) {
-            request.completeError(StateError(msg['message'] as String));
-          } else {
-            _status(tr('Ошибка удалённого устройства: {error}', {'error': msg['message']}));
+          if (handled || (requestId == null && transferId == null)) {
+            // Report current errors, but ignore stale ID-bearing diagnostics.
+            // Neither case may abort a different operation.
+            _status(tr('Ошибка удалённого устройства: {error}',
+                {'error': msg['message']}));
           }
           break;
         case 'download':
@@ -800,7 +886,7 @@ class FerryService extends ChangeNotifier {
           final dir = await PersonalDataBridge.prepareContactsImport();
           _contactsImportDir = dir;
           _contactsImportName = fileName;
-          _incoming = IncomingTransfer(dir, _status, msg['transferId'] as String);
+          _setIncoming(IncomingTransfer(dir, _status, msg['transferId'] as String));
           _discardingTransfer = false;
           _status(tr('Получаем адресную книгу из {name}', {'name': peer.remoteName}));
           break;
@@ -817,7 +903,7 @@ class FerryService extends ChangeNotifier {
           final destination = containedPath(exportRoot, msg['dest'] as String);
           await Directory(destination).create(recursive: true);
           _discardingTransfer = false;
-          _incoming = IncomingTransfer(destination, _status, msg['transferId'] as String);
+          _setIncoming(IncomingTransfer(destination, _status, msg['transferId'] as String));
           _status(tr('Получение файлов'));
           break;
         case 'dir':
@@ -841,8 +927,9 @@ class FerryService extends ChangeNotifier {
             }
           }
           await incoming.consume(msg, peer);
+          if (msg['type'] != 'transfer_end') _touchIncoming();
           if (msg['type'] == 'transfer_end') {
-            _incoming = null;
+            _setIncoming(null);
             await peer.sendJson({
               'type': 'transfer_complete',
               'transferId': incoming.transferId,
@@ -905,16 +992,27 @@ class FerryService extends ChangeNotifier {
           }
           break;
         default:
-          throw FormatException('Unknown operation ${msg['type']}');
+          // Forward-compatible unknown commands must not abort a valid
+          // transfer or start an endless error-response loop.
+          break;
       }
     } catch (e) {
       _status(tr('Ошибка передачи: {error}', {'error': e}));
       if (peer.ready) {
-        await peer.sendJson({'type': 'error', 'message': '$e'});
+        final response = <String, dynamic>{'type': 'error', 'message': '$e'};
+        if (msg['transferId'] is String) {
+          response['transferId'] = msg['transferId'];
+        }
+        if (msg['id'] is int) {
+          response['id'] = msg['id'];
+        }
+        await peer.sendJson(response);
       }
-      if (_incoming != null) {
-        await _incoming!.abort();
-        _incoming = null;
+      final incoming = _incoming;
+      // Only an error in *this transfer* can discard that transfer's data.
+      if (incoming != null && msg['transferId'] == incoming.transferId) {
+        await incoming.abort();
+        _setIncoming(null);
         _discardingTransfer = true;
         _contactsImportDir = null;
         _contactsImportName = null;
@@ -928,13 +1026,18 @@ class FerryService extends ChangeNotifier {
     if (incoming == null) throw const FormatException('Unexpected data frame');
     try {
       await incoming.consumeChunk(bytes, peer);
+      _touchIncoming();
     } catch (e) {
       _status(tr('Ошибка файловой передачи: {error}', {'error': e}));
       await incoming.abort();
-      _incoming = null;
+      _setIncoming(null);
       _discardingTransfer = true;
       if (peer.ready) {
-        await peer.sendJson({'type': 'error', 'message': '$e'});
+        await peer.sendJson({
+          'type': 'error',
+          'transferId': incoming.transferId,
+          'message': '$e',
+        });
       }
     }
   }
@@ -950,17 +1053,23 @@ class FerryService extends ChangeNotifier {
           (kind != 'contacts' && kind != 'sms')) {
         throw StateError('Резервное копирование поддерживается только на Android');
       }
-      if (_sending || _incoming != null) throw StateError('Другая передача уже выполняется');
+      if (_sending || _incoming != null) {
+        throw StateError('Другая передача уже выполняется');
+      }
       // No pop-up while recovering from a phone with a broken screen.
       // Sensitive backups are opt-in and individually authorized beforehand.
       if (!canPeerBackup(kind)) {
-        throw StateError('На телефоне заранее не разрешено резервное копирование $kind для этого ПК');
+        throw StateError(
+          'На телефоне заранее не разрешено резервное копирование $kind для этого ПК',
+        );
       }
-      tempFile = await PersonalDataBridge.makeBackup(kind);
+      // Claim the outgoing slot BEFORE asynchronous ContactsProvider/SMS
+      // export. A second request cannot race the first while it prepares data.
       _sending = true;
       _outgoingTransferId = transferId;
       _transferComplete = Completer<void>();
       _flowAcks.begin(transferId);
+      tempFile = await PersonalDataBridge.makeBackup(kind);
       await peer.sendJson({
         'type': 'personal_backup_started',
         'transferId': transferId,
@@ -1038,7 +1147,11 @@ class FerryService extends ChangeNotifier {
     String transferId,
   ) async {
     if (_sending || _incoming != null) {
-      await peer.sendJson({'type': 'error', 'message': 'Transfer already active'});
+      await peer.sendJson({
+        'type': 'error',
+        'transferId': transferId,
+        'message': 'Transfer already active',
+      });
       return;
     }
     _sending = true;
@@ -1057,7 +1170,11 @@ class FerryService extends ChangeNotifier {
     } catch (e) {
       _status(tr('Ошибка отправки: {error}', {'error': e}));
       if (peer.ready) {
-        await peer.sendJson({'type': 'error', 'message': '$e'});
+        await peer.sendJson({
+          'type': 'error',
+          'transferId': transferId,
+          'message': '$e',
+        });
       }
     } finally {
       _flowAcks.finish();
@@ -1082,6 +1199,7 @@ class FerryService extends ChangeNotifier {
     _disposed = true;
     _beacon?.cancel();
     _pairingTimer?.cancel();
+    _incomingIdleTimer?.cancel();
     _udp?.close();
     _http?.close(force: true);
     connected?.disconnect();

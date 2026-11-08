@@ -54,6 +54,7 @@ class IncomingTransfer {
 
   String _destinationPath(String remoteRelative) {
     final clean = sanitizeRelative(remoteRelative);
+    validateDestinationPath(clean, windows: Platform.isWindows);
     final components = clean.split('/');
     if (components.isNotEmpty &&
         _directoryAliases.containsKey(components.first)) {
@@ -72,6 +73,7 @@ class IncomingTransfer {
       case 'dir':
         final relative = sanitizeRelative(msg['path'] as String);
         _recordEntry(relative);
+        validateDestinationPath(relative, windows: Platform.isWindows);
         if (!relative.contains('/')) {
           // A second copy of a whole directory gets its own root,
           // rather than mixing renamed files into the existing folder.
@@ -131,6 +133,9 @@ class IncomingTransfer {
   }
 
   Future<void> consumeChunk(Uint8List bytes, SecurePeer peer) async {
+    if (bytes.length > SecurePeer.maxEncryptedChunkBytes - 1) {
+      throw const FormatException('Transfer chunk exceeds protocol limit');
+    }
     if (_openedFile == null) throw const FormatException('Chunk without file_begin');
     _received += bytes.length;
     if (_received > _expected) throw const FormatException('File exceeds declared size');

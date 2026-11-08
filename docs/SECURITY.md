@@ -9,9 +9,10 @@ FerryPane is a LAN-first **peer-to-peer file manager**. This document describes 
 - Device names, public identity keys, local-network discovery messages, IP addresses, connection times and traffic sizes **are not secret**. A sniffer can observe them. File names, contents, contacts and SMS are encrypted *after* the handshake; direct control over an endpoint, a stolen private identity key, and denial of service are separate threats.
 - The application accepts TCP only on a private IPv4/loopback source address; manual destinations must also resolve to private/loopback addresses. **Private address ranges alone do not prove that two devices are on the same physical LAN**: a VPN or overlay can route those addresses remotely. Use a trusted LAN and firewall.
 - New incoming pairing is **closed by default**. The receiving device owner must explicitly open a **two-minute pairing window** with the lock icon. An outgoing manually initiated connection is treated as that local user's pairing intent. A previously trusted device can reconnect without reopening the window.
+- WebSocket requests carrying a browser `Origin` header are refused with HTTP 403; the native Dart client does not send this header. This is defense in depth against webpages occupying the pairing slot, not a replacement for authentication.
 - Once one peer is connected, another inbound connection gets HTTP 409 and **cannot evict the live authenticated session**. A single pending handshake is allowed; attempts are throttled to 6 per minute per source address. Invalid/oversized hellos and encrypted packets are rejected and initial exchanges time out. This primarily reduces nuisance/DoS, but cannot guarantee availability against a network attacker.
 - After new pairing, access is **read-only by default**. Owners can grant/revoke read or write of the exported folder for the currently connected peer in Settings. Pre-0.1.6 paired devices retain their previous read/write access to avoid unexpectedly breaking file transfers; review these permissions. The Android contacts and SMS backup rights remain separate opt-ins with Android platform permissions.
-- Transfers enforce relative paths with no `..`, block symbolic-link path components, limit path size, packet size, per-file and per-transfer declared sizes, and verify SHA-256 before committing. **Race-free filesystem containment against a malicious local process is not yet guaranteed**, because pure Dart file-open operations do not provide portable `openat`-style descriptor confinement. This deserves a later native audit.
+- Transfers enforce relative paths with no `..`, block symbolic-link path components, limit path size, packet size, per-file and per-transfer declared sizes, and verify SHA-256 before committing. A receiver-side **five-minute inactivity watchdog** aborts stalled transfers and removes the active temporary .part file. On Windows, unsafe/reserved device aliases are refused; this restriction is not applied to Linux/Android filenames. **Race-free filesystem containment against a malicious local process is not yet guaranteed**, because pure Dart file-open operations do not provide portable `openat`-style descriptor confinement. This deserves a later native audit.
 
 ## Protected identity keys and upgrade migration
 
@@ -56,6 +57,18 @@ The private X25519 device identity **never leaves its local OS key store as a ne
 Contacts (.vcf), SMS (.json and self-contained .html) and files copied to the PC are saved **without at-rest encryption** unless your destination filesystem provides it. The SMS viewer does not fetch remote resources, but an HTML file contains readable personal data for anyone who can access it.
 
 Android needs `READ_CONTACTS` and/or `READ_SMS` for extraction. The phone must already be paired and the specific peer must have been granted the corresponding backup right. No remote request silently grants Android OS permission. Backup/export is not permitted just because the attacker knows the phone's IP address or device name.
+
+## Release checksums and authenticity
+
+Since Preview.2 the release contains `SHA256SUMS` for five platform packages, generated and verified in GitHub Actions. Compare checksums of downloaded files to detect accidental corruption. A checksum file hosted beside the binaries **does not prove publisher authenticity** if an attacker can replace the whole release. Independent detached signatures or GitHub build provenance still need to be implemented and verified.
+
+## Protocol robustness and limits
+
+- Directory response IDs and transfer/error IDs are checked against **the current operation**. Stale replies cannot alter a newer listing or abort another transfer. Unknown command types are ignored rather than disconnecting an otherwise valid peer.
+- Exporting contacts/SMS from Android reserves a transfer slot before querying Android's content provider, preventing simultaneous exports from corrupting stream state.
+- Incoming and outgoing encrypted frame/chunk size checks are retained at both ends. Regular transfers still use 64 KiB chunks.
+- A single incoming pairing prompt can occupy the pending slot until the user approves/rejects it or its timeout expires. This limited availability trade-off avoids spamming users with concurrent pairing dialogs; it is not a bypass of pairing authorization.
+- Ephemeral X25519 contributions provide forward-secrecy properties for recorded traffic **under usual ephemeral-secret erasure assumptions**; the project has not undergone an independent cryptographic audit.
 
 ## Remaining work before a security-stable release
 

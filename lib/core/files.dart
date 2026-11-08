@@ -21,6 +21,28 @@ String sanitizeRelative(String value) {
   return parts.where((part) => part.isNotEmpty && part != '.').join('/');
 }
 
+/// Reject Windows device aliases and path components that cannot be safely
+/// created through ordinary Win32 APIs. Called only on the *receiving* side:
+/// Linux/Android can continue transferring their legitimate filenames.
+void validateDestinationPath(String relative, {required bool windows}) {
+  if (!windows) return;
+  final clean = sanitizeRelative(relative);
+  final reserved = RegExp(
+    r'^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$',
+    caseSensitive: false,
+  );
+  final invalid = RegExp(r'[<>:"|?*\x00-\x1f]');
+  for (final component in clean.split('/')) {
+    if (component.isEmpty) continue;
+    if (reserved.hasMatch(component) ||
+        invalid.hasMatch(component) ||
+        component.endsWith('.') ||
+        component.endsWith(' ')) {
+      throw const FormatException('Filename is not allowed on Windows');
+    }
+  }
+}
+
 /// Refuse symlinks even when their target points back under the root.
 /// This deliberately prioritizes containment over following a user's links.
 String containedPath(String root, String relative) {
