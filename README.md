@@ -1,100 +1,98 @@
 # FerryPane
 
-**FerryPane** — open-source file manager for direct encrypted file transfers between **Windows, Linux and Android** on one local network, without accounts, cloud or cables.
+**Open-source, local-first file manager for Windows, Linux and Android.**
 
-One Flutter/Dart peer application runs on every supported OS. Every installation can send, receive and browse files on another. Desktop displays **two file panels**; phones switch between two panels; tablets display both when the window is wide enough.
+FerryPane connects two devices on a local network and lets you browse, select and copy files between them through a two-panel file manager. No account, public server, cloud upload or USB cable is required. PC ↔ Android, PC ↔ PC and Android ↔ Android all use the same application and encrypted transfer protocol.
 
-> **Status:** 0.1.4 preview / repaired phone backups and in-app contact import. Real-device interoperability and security review remain necessary before treating it as a stable security-sensitive product.
+**Русская документация:** [README.ru.md](docs/README.ru.md).
 
-## What works
+> **Current status: 0.1.5 Preview.** This is a functional preview, not a security-audited production release. File transfers, recovery of contacts and SMS archives should still be tested on your devices. Android background recovery is not yet implemented.
 
-- Browse folders on the current device and a connected peer; choose Windows drive from a disk picker in the local pane.
-- Send or receive files and whole nested folders using two identical directional buttons showing source selection counts. Each panel has **«Выделить всё»** to select all files/folders at once (excluding the virtual `..` parent entry), and «Снять» to clear selection. No ambiguous F5 shortcut.
-- Two Windows PCs, Windows↔Linux, Linux↔Linux, Android↔PC, and Android↔Android use the same application and wire protocol.
-- Automatically discover peers using directed UDP broadcasts over all suitable **private IPv4 network interfaces** (Ethernet, Wi-Fi and private VPN interfaces) instead of only the OS default route. Public Internet and mobile-network interfaces are excluded.
-- Android additionally probes each available LAN network via Android's `Network.bindSocket` so a full-tunnel VPN need not silently capture discovery packets **when the VPN allows bypass**. The built-in manual IP option remains available.
-- A refresh button forces a new scan, and paired devices' last-known addresses are remembered.
-- First-time peer pairing with an identical **6-digit verification code shown on both devices**; approve only if it matches.
-- X25519 key exchange + session-bound ephemeral keys, HKDF-SHA256 and AES-256-GCM encrypted application packets.
-- Stream batches of many tiny files over one persistent WebSocket; 64 KiB frames and bounded flow control. Each file is SHA-256 verified before finalization; interrupted files remain uncommitted.
-- Incoming name conflicts are resolved by adding a numeric suffix; repeat folder transfers create a separate folder (existing files are not overwritten).
-- Export root configurable in the settings; desktop uses a native folder chooser. Remote peers cannot navigate outside it, and symbolic links are never followed.
-- No Internet required; peer can work over an Android Wi-Fi hotspot.
-- Windows/Linux/Android packages built by GitHub Actions.
+## Highlights
 
-## Phone contacts and SMS (experimental)
+- **Two file panels.** Switch either panel between local and remote files, navigate with `..`, select individual files, directories or **Select all** (folders are copied recursively).
+- **Works without the Internet.** Connect via ordinary Wi-Fi, Ethernet or a phone hotspot. Find peers on private IPv4 subnets, or enter an IP address manually. VPN policies and firewalls may restrict discovery.
+- **Pair once.** Compare the six-digit confirmation code on **both** devices. Trusted peer keys are remembered; communication uses X25519 key agreement, HKDF-SHA256 and AES-256-GCM application-frame encryption.
+- **One continuous transfer.** Small files are streamed in batches rather than requiring a separate network connection for each file. Incoming files are SHA-256 checked before commit. Existing names receive a suffix instead of being silently overwritten.
+- **Phone backups.** Export Android contacts to `.vcf` and SMS to both structured `.json` and a standalone, searchable, offline `.html` conversation viewer. The desktop reveals the saved file in the file manager.
+- **Restore contacts in FerryPane.** Send a `.vcf` from PC to a functioning Android phone; review new/matched counts, confirm and merge using Android ContactsProvider. Existing contacts are not deleted. Some advanced vCard fields (photos and less common attributes) are not restored.
+- **Russian / English UI.** Settings → Interface language: System, Русский, English. Language preference is preserved across application restarts on all three platforms.
+- **Portable and installed versions.** Windows ZIP or EXE installer, Linux TAR.GZ or DEB package, Android APK.
 
-On the desktop, when connected to Android, the toolbar provides “Бэкап контактов”, “Бэкап SMS”, “Восстановить контакты”, and “Восстановить контакты”.
+## Downloads
 
-Contacts are exported as vCard files. SMS are saved as both **JSON** and a standalone, searchable **offline HTML conversation archive** (not MMS/RCS), inside the chosen local PC folder. The PC shows the final saved file paths only after verified transfer and refreshes its file panel. FerryPane on Android previews incoming vCard contacts, then after explicit confirmation adds missing contacts and merges missing phone numbers/email using Android ContactsProvider; it never deletes existing contacts. Photos and rare vCard attributes are not imported yet. SMS restoration is **not implemented** because Android limits writing to the default SMS handler.
+Get the latest preview from [GitHub Releases](https://github.com/mirivlad/FerryPane/releases).
 
-For unattended recovery when the display fails, **there are no per-transfer prompts on Android for downloading allowed files**. Sensitive contacts/SMS backups require a separate **one-time opt-in per already-paired desktop key**, along with any necessary Android OS permission. Users enable this while the screen works in Android sharing settings; after that, an authorized PC can download backups without on-phone confirmation as long as FerryPane remains running. Initial pairing still requires code comparison. See [Phone backup guide](docs/PHONE_BACKUP.md).
+| Platform | Files | How to use |
+|---|---|---|
+| Windows x64 | `FerryPane-windows-x64-setup.exe`, `FerryPane-windows-x64.zip` | Run the per-user installer, or extract the whole ZIP and launch `ferrypane.exe` |
+| Debian/Ubuntu x64 | `FerryPane-linux-amd64.deb`, `FerryPane-linux-x64.tar.gz` | Install the DEB with `sudo apt install ./FerryPane-linux-amd64.deb`, or extract TAR.GZ and run `./ferrypane` |
+| Android | `FerryPane-android.apk` | Install APK on the phone/tablet and grant the required Android permissions |
 
-## Basic usage
+The Windows EXE installer installs to the current user's `%LOCALAPPDATA%\Programs\FerryPane` and creates shortcuts and an uninstall entry. The Linux DEB installs to `/opt/ferrypane` and adds a desktop application entry.
 
-1. Install/open FerryPane on both devices, connected to the same Wi-Fi, Ethernet LAN or Android hotspot.
-2. On Android, permit **All files access** in Android's settings when prompted. Android's OS restrictions on other apps' private data remain in force.
-3. On each device, review the **shared folder** in Settings. On desktop it defaults to Downloads (or home if unavailable); on Android it defaults to shared internal storage.
-4. On one device, choose the other in the **Wi-Fi discovery** menu or click **Connect by IP**. If auto-discovery is blocked by the network, type the IP shown in Settings on the destination device.
-5. On both devices confirm the **same** six-digit pairing code. Reject if codes differ.
-6. Choose **Local** or **Remote** in either panel. Open a folder by tapping/clicking it, select one or more **files or folders** using the checkboxes, then click the arrow toward the destination panel.
+**Android updates:** APKs since v0.1.2 use a permanent, pinned signing certificate and should install in place. Older v0.1.0/0.1.1 APKs used temporary keys and require a one-time uninstall. Updating Android can also cause the operating system to revoke sensitive permissions: **an enabled FerryPane backup toggle is not evidence that Android still permits access.** v0.1.5 checks the actual Android grant and offers to request it again. See [Android signing](docs/SIGNING.md).
 
-The first entry in every folder is `..` (parent folder), disabled at the root. Device names are detected from Windows/Linux hostnames or Android model and can be edited in sharing settings.
+## First connection
 
-The remote panel shows the root *exported* by the other device, not unrestricted access to its entire filesystem.
+1. Launch FerryPane on both devices and connect them to the same LAN or hotspot.
+2. Review the **Shared folder** and **Device name** in Settings. Remote devices can access only the configured shared folder, subject to Android filesystem limits.
+3. Choose a device from the discovery menu, or use **Connect by IP**. Firewalls may require inbound TCP **47655** and UDP **47656** on private networks.
+4. Compare the six-digit pairing codes shown on **both** screens. Only accept if they match.
+5. Select **Local** or **Remote** independently in either panel. Browse directories, tick files/folders or choose **Select all**, then click the appropriate *Left → Right* or *Right → Left* button.
 
-### Platform limitations in the preview
+For local network discovery under VPNs such as NaiveProxy, FerryPane tries each suitable private IPv4 interface. Android VPN lockdown may still prohibit bypassing the tunnel. This is an Android/VPN policy, not an authorization FerryPane attempts to override.
 
-- Android file access is bounded by OS restrictions; **Android/data** and private app data cannot be exposed simply by granting all-files access.
-- On Android, **keep the app in the foreground during transfers** for now. A persistent foreground-service implementation is not included yet.
-- Linux and Windows firewalls may need inbound TCP **47655** and discovery UDP **47656** (local network only).
-- The desktop archives are **portable**, not installers. Windows zip: extract and run `ferrypane.exe`; Linux tar.gz: extract the whole directory and execute `./ferrypane` (GTK runtime libraries required).
-- Android APK is side-loaded. **From 0.1.2 onward, release APKs require the same permanent signing key** to support subsequent in-place updates. Until the repo owner configures the required GitHub Actions secrets, the release job fails instead of publishing a randomly signed APK. See [Android signing and upgrade instructions](docs/SIGNING.md).
-- Upgrading **once** from preview 0.1.0/0.1.1 requires uninstalling the old Android app, because those APKs were signed by runner-specific temporary keys. Future updates signed by the permanent key preserve app data, including pairing keys.
-- Only one connected peer and one active transfer per application are supported in this preview.
-- **No hub, synchronization, directory deletion, remote rename or resumable interrupted transfer yet.** Incomplete copies are rejected; retry starts the affected copy anew.
-- Automatic discovery uses **per-subnet UDP broadcast**, not mDNS yet; use manual IP if blocked. On Windows, allow inbound TCP **47655** and UDP **47656** for the application on a **Private** network. Your own device is intentionally excluded from its discovery results.
-- Authentication keys currently live in the application's private preferences; hardware-backed keystore integration is future work.
-- All devices must be updated together for protocol v2; preview.1 clients cannot connect to this version.
-- The session security mechanism is new and has not undergone an independent cryptographic audit; do not treat the preview as suitable for hostile networks or high-risk secrets.
+## Phone contacts and SMS
 
-## Build from source
+To prepare for unattended **export** from a phone with a damaged screen:
 
-Install Flutter stable, a supported platform toolchain, and for Android the Android SDK/JDK 17.
+1. While the phone still works, pair it with the trusted PC.
+2. On the phone, open **Settings** while connected to the PC, enable **Contacts backup** and/or **SMS backup** for that specific computer, and grant the corresponding **Android system permissions**. Some Android versions restrict SMS access.
+3. On PC, open the destination folder in a local panel and click **Back up contacts** or **Back up SMS**.
+4. The operation waits for the received file to be verified, refreshes the local panel, displays its full path, and opens the file manager with the file selected (or opens the containing folder on Linux without FileManager1 support).
+
+Backing up contacts/SMS requires *both* the trusted-peer grant and the Android OS permission. FerryPane does **not** ask for another confirmation on the phone for every backup. The app must still be running; a reliable Android foreground recovery service is **planned, not delivered**.
+
+To **restore contacts**, use **Restore contacts** on PC and select a `.vcf` file. The working phone must confirm the preview inside FerryPane. Changes are additive; recheck contacts after import. **SMS restore is intentionally not supported**: browse the offline HTML instead. SMS export does not cover MMS, RCS or deleted messages.
+
+**Privacy:** exported contacts and messages contain personal data. The offline HTML has embedded data, no external scripts, fonts or network dependencies; keep both HTML and JSON in a protected folder.
+
+More details: [Phone backups and permissions](docs/PHONE_BACKUP.md).
+
+## Known limitations
+
+- Only one remote peer and one transfer at a time; no synchronization, resumable transfers, cancel queue or WAN relay yet.
+- Android storage permissions cannot reveal other apps' private data or some restricted `Android/data` paths. Some vendors may limit `READ_SMS`.
+- Android must currently stay running/foreground during transfers. FerryPane cannot silently recover data from an app killed by the OS or perform new pairing on an unusable screen.
+- Native contact import currently handles common fields; it does **not** guarantee complete fidelity for vCard photos, account settings or every address-book provider. Test imports on a spare device or with a separate backup first.
+- Windows installer and Linux DEB support x64; mobile package supports Android architectures in the release build. Code signing for Windows installers is not yet implemented, so Windows SmartScreen may show an unrecognized publisher.
+- No independent security audit. Avoid relying on the preview for sensitive data over hostile networks.
+
+## Build and develop
+
+Requires [Flutter stable](https://docs.flutter.dev/get-started/install) with the corresponding desktop/Android toolchain. Linux additionally needs GTK3 development libraries; Android requires SDK/JDK 17.
 
 ```bash
 bash tool/prepare_platforms.sh
-flutter run -d linux      # or: -d windows / <Android device ID>
-flutter build linux --release
-flutter build windows --release
-flutter build apk --release
+flutter analyze
+flutter test
+flutter build linux --release   # on Linux
+flutter build windows --release # on Windows
 ```
 
-Platform folders are generated locally by `flutter create`; `tool/patch_android.py` applies Android LAN and storage permission entries. They are intentionally not committed to Git.
+The platform projects are created by Flutter on the build machine; Android-specific permissions and native code are applied by `tool/patch_android.py`. Do not publish `flutter build apk --release` with the generated debug signing key; tagged CI releases require the permanent signing secrets documented in [SIGNING.md](docs/SIGNING.md).
 
-GitHub Actions builds Windows, Linux, and APK artifacts on every PR/push. A `v*` tag also publishes a release with the three packages.
+The CI also creates `.deb` with `tool/build_deb.sh` and a per-user NSIS Windows installer with `tool/windows/FerryPane.nsi`. Pull-request builds validate all platforms; version tags publish the five release artifacts.
 
-## Project layout
+## Project and contributing
 
-- `lib/core/files.dart`: safe file and path handling.
-- `lib/core/secure_peer.dart`: handshake, trust, authenticated encryption.
-- `lib/core/service.dart`: local WebSocket server, discovery, peer operations.
-- `lib/core/transfer.dart`: streamed directory/file transfer and checksums.
-- `lib/main.dart`: adaptive two-pane file manager.
-- `docs/`: architecture and roadmap.
-- `test/`: filesystem path-security tests.
+- [Architecture and current implementation](docs/ARCHITECTURE.md)
+- [Roadmap and deferred features](docs/ROADMAP.md)
+- [Android backups and restoration](docs/PHONE_BACKUP.md)
+- [Android signing and update compatibility](docs/SIGNING.md)
+- [Issues](https://github.com/mirivlad/FerryPane/issues)
 
-## Licensing
+FerryPane is licensed under the **GNU General Public License v3.0 or later**, see [LICENSE](LICENSE). A possible future WAN relay/hub is a separate undecided service, with no assumed license or business model.
 
-FerryPane client application is licensed under **GNU GPL version 3 or later**; see [LICENSE](LICENSE). A possible future internet relay/hub is a **separate, undecided project**, and its license/business model is not determined by the client-app license. A public protocol can be implemented by independent software.
-
-Contributions, testing reports and bug fixes are welcome.
-
-
-### LAN discovery with a VPN enabled
-
-On Windows, a system HTTP proxy normally does not affect UDP discovery, but a VPN tunnel or firewall may. FerryPane reads each interface's IPv4 prefix and broadcasts only within private interface networks; public Internet interfaces are never probed.
-
-On Android, a VPN using `VpnService` can force traffic from all apps into its tunnel. FerryPane tries Android's `Network.bindSocket` on underlying Wi-Fi/Ethernet and `bindProcessToNetwork` for a peer on the same physical LAN. **If the VPN forbids bypass or "Block connections without VPN" is enabled, Android may still block these routes by design.** In that case, add FerryPane to the VPN app's permitted-exceptions list if available, or disable lockdown only if you explicitly accept the change in protection. FerryPane does not bypass enforced Android security policy.
-
-No subnet host ranges are brute-force scanned. This is link-local broadcast service discovery only, limited to private network interfaces.
+Bug reports with OS/build number, both app versions, network conditions (including VPN) and reproduction steps are welcome.

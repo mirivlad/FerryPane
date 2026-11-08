@@ -894,8 +894,8 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
         runSpacing: 4,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
-          const Padding(
-            padding: EdgeInsets.only(right: 6),
+          Padding(
+            padding: const EdgeInsets.only(right: 6),
             child: Text(tr('Данные телефона:')),
           ),
           OutlinedButton.icon(

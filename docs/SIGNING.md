@@ -14,14 +14,14 @@ Public certificate SHA-256 fingerprint:
 
 ### Where the private key lives
 
-A permanent signing PKCS12 keystore has been generated **on tomas**, under the SSH user's restricted directory:
+A permanent PKCS12 signing keystore must be kept in a **private owner-controlled location**, for example:
 
 ```
-/home/mirivlad/.local/share/ferrypane/signing/ferrypane-release.p12
-/home/mirivlad/.local/share/ferrypane/signing/store-password
+$HOME/.local/share/ferrypane/signing/ferrypane-release.p12
+$HOME/.local/share/ferrypane/signing/store-password
 ```
 
-Directory mode `0700`; both files `0600`. **Neither file belongs in the public GitHub repository.** Make a secure offline backup of *both* files. Losing this private key means future Android versions cannot update packages installed with that key. The key stays valid through March 2054.
+Directory mode `0700`; both files `0600`. **Neither file belongs in the public GitHub repository.** Make a secure offline backup of *both* files. Losing this private key means future Android versions cannot update packages installed with that key. Keep an offline backup of the keystore and password for all future updates.
 
 ### One-time GitHub Actions setup
 
@@ -32,11 +32,11 @@ Create exactly these two:
 - `FERRYPANE_ANDROID_KEYSTORE_B64`: base64 of the complete PKCS12 file, **one line**.
 - `FERRYPANE_ANDROID_STORE_PASSWORD`: the complete content of the password file, without an extra newline.
 
-Obtain both values locally on tomas, and enter them into the repository's **Actions secrets** interface (never paste them into an issue or chat):
+Obtain both values on the machine hosting the offline private key, and enter them into the repository's **Actions secrets** interface (never paste them into an issue or chat):
 
 ```bash
-base64 -w0 /home/mirivlad/.local/share/ferrypane/signing/ferrypane-release.p12
-cat /home/mirivlad/.local/share/ferrypane/signing/store-password
+base64 -w0 $HOME/.local/share/ferrypane/signing/ferrypane-release.p12
+cat $HOME/.local/share/ferrypane/signing/store-password
 ```
 
 The `tool/prepare_signing.sh` build step decodes the secret in the ephemeral runner and verifies the certificate fingerprint **before** building. After signing, CI verifies the APK's signature with `apksigner` and the same pinned fingerprint.
