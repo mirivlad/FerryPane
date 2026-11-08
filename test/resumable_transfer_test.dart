@@ -141,9 +141,11 @@ void main() {
       await firstTry;
       // On abrupt disconnect, the sender must keep its selection even if a
       // flow acknowledgement was racing with WebSocket.close().
-      expect(a.hasPendingCopy, isTrue,
-          reason: 'A transport error must not delete the recovery job: '
-              '${a.lastMessage}');
+      if (!a.hasPendingCopy) {
+        throw StateError('Sender lost selection following disconnect: '
+            'senderStatus=${a.lastMessage}, receiverStatus=${server.lastMessage}, '
+            'largeFinal=${await File('${bRoot.path}/Documents/large.bin').exists()}');
+      }
       expect(await File('${bRoot.path}/Documents/first.txt').exists(), isTrue);
       // Diagnose whether interruption preserved a durable partial file,
       // rather than treating a completed retry as proof of actual resume.
