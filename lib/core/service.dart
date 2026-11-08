@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
 import 'files.dart';
+import 'file_operations.dart';
 import 'flow_acknowledgements.dart';
 import 'lan_networks.dart';
 import 'localization.dart';
@@ -162,6 +163,10 @@ class FerryService extends ChangeNotifier {
 
   Completer<List<FileEntry>>? _listRequest;
   int? _pendingListId;
+  Completer<FileOperationResult>? _fileOperationRequest;
+  int? _fileOperationId;
+  Completer<List<FileEntry>>? _findRequest;
+  int? _findId;
   final FlowAcknowledgements _flowAcks = FlowAcknowledgements();
   Completer<void>? _transferComplete;
   Completer<ResumeReply>? _resumeWaiter;
@@ -805,6 +810,18 @@ class FerryService extends ChangeNotifier {
           _listRequest?.completeError(StateError('Disconnected: $reason'));
           _listRequest = null;
           _pendingListId = null;
+          final op = _fileOperationRequest;
+          if (op != null && !op.isCompleted) {
+            op.completeError(StateError('Disconnected: $reason'));
+          }
+          _fileOperationRequest = null;
+          _fileOperationId = null;
+          final find = _findRequest;
+          if (find != null && !find.isCompleted) {
+            find.completeError(StateError('Disconnected: $reason'));
+          }
+          _findRequest = null;
+          _findId = null;
           _flowAcks.cancel(StateError('Disconnected: $reason'));
           final waitResume = _resumeWaiter;
           if (waitResume != null && !waitResume.isCompleted) {
@@ -950,6 +967,61 @@ class FerryService extends ChangeNotifier {
     exportRoot = p.normalize(p.absolute(path));
     await identity.prefs.setString('ferrypane.export.root', exportRoot);
     _status(tr('Корневая общая папка: {path}', {'path': exportRoot}));
+  }
+
+  /// One mutation in flight at a time, using a request ID bound to the peer.
+  /// The receiving device revalidates every path beneath its export root.
+  Future<FileOperationResult> remoteFileOp(String action,
+      {required String path, String? target,
+      String conflict = 'keepBoth'}) async {
+    final peer = connected;
+    if (peer == null || !peer.ready) {
+      throw StateError('No connected device');
+    }
+    if (_fileOperationRequest != null) {
+      throw StateError('File operation already running');
+    }
+    final request = Completer<FileOperationResult>();
+    final id = ++_nextId;
+    _fileOperationRequest = request;
+    _fileOperationId = id;
+    try {
+      await peer.sendJson({
+        'type': 'file_op', 'id': id, 'action': action,
+        'path': path, 'target': target, 'conflict': conflict,
+      });
+      return await request.future.timeout(const Duration(minutes: 10));
+    } finally {
+      if (_fileOperationRequest == request) {
+        _fileOperationRequest = null;
+        _fileOperationId = null;
+      }
+    }
+  }
+
+  Future<List<FileEntry>> remoteSearch(String path, String query) async {
+    final peer = connected;
+    if (peer == null || !peer.ready) {
+      throw StateError('No connected device');
+    }
+    if (_findRequest != null) {
+      throw StateError('Search already in progress');
+    }
+    final request = Completer<List<FileEntry>>();
+    final id = ++_nextId;
+    _findRequest = request;
+    _findId = id;
+    try {
+      await peer.sendJson({
+        'type': 'find', 'id': id, 'path': path, 'query': query,
+      });
+      return await request.future.timeout(const Duration(seconds: 90));
+    } finally {
+      if (_findRequest == request) {
+        _findRequest = null;
+        _findId = null;
+      }
+    }
   }
 
   Future<List<FileEntry>> remoteList(String path) async {
@@ -1193,14 +1265,60 @@ class FerryService extends ChangeNotifier {
         throw StateError('Message from unauthenticated peer');
       }
       final type = msg['type'];
-      if ((type == 'list' || type == 'download') && !peerCanRead) {
+      if ((type == 'list' || type == 'find' || type == 'download') &&
+          !peerCanRead) {
         throw StateError('This device has no permission to read shared files');
       }
-      if ((type == 'upload_start' || type == 'personal_contacts_import_start') &&
-          !peerCanWrite) {
+      if ((type == 'upload_start' || type == 'personal_contacts_import_start' ||
+          type == 'file_op') && !peerCanWrite) {
         throw StateError('This device has no permission to write shared files');
       }
       switch (type) {
+        case 'file_op':
+          if (_sending || _incoming != null) {
+            throw StateError('File transfer in progress');
+          }
+          final result = await FileManagerOps.remote(
+            exportRoot, msg['action'] as String,
+            path: msg['path'] as String,
+            target: msg['target'] as String?,
+            conflict: msg['conflict'] as String? ?? 'keepBoth',
+          );
+          await peer.sendJson({
+            'type': 'file_op_result', 'id': msg['id'],
+            'path': result.path, 'skipped': result.skipped,
+          });
+          break;
+        case 'file_op_result':
+          final waitingOp = _fileOperationRequest;
+          if (msg['id'] == _fileOperationId &&
+              waitingOp != null && !waitingOp.isCompleted) {
+            waitingOp.complete(FileOperationResult(
+              msg['path'] as String,
+              skipped: msg['skipped'] == true,
+            ));
+          }
+          break;
+        case 'find':
+          final matches = await FileManagerOps.search(
+            exportRoot, msg['path'] as String, msg['query'] as String,
+          );
+          await peer.sendJson({
+            'type': 'find_result', 'id': msg['id'],
+            'entries': matches.map((entry) => entry.toJson()).toList(),
+          });
+          break;
+        case 'find_result':
+          final waitingFind = _findRequest;
+          if (msg['id'] == _findId &&
+              waitingFind != null && !waitingFind.isCompleted) {
+            waitingFind.complete(
+              (msg['entries'] as List).map((entry) =>
+                FileEntry.fromJson(Map<String, dynamic>.from(entry as Map))
+              ).toList(),
+            );
+          }
+          break;
         case 'list':
           final id = msg['id'];
           try {
@@ -1241,6 +1359,18 @@ class FerryService extends ChangeNotifier {
           if (requestId != null && requestId == _pendingListId &&
               request != null && !request.isCompleted) {
             request.completeError(reason);
+            handled = true;
+          }
+          final op = _fileOperationRequest;
+          if (requestId != null && requestId == _fileOperationId &&
+              op != null && !op.isCompleted) {
+            op.completeError(reason);
+            handled = true;
+          }
+          final find = _findRequest;
+          if (requestId != null && requestId == _findId &&
+              find != null && !find.isCompleted) {
+            find.completeError(reason);
             handled = true;
           }
           final pendingBackup = _personalBackupWaiter;

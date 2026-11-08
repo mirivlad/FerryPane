@@ -1,12 +1,13 @@
 # FerryPane roadmap
 
-**Current state: v0.1.8 Preview (November 2026).** The GitHub release artifacts are useful for LAN file transfers, but security-sensitive and Android recovery functions still need real-device validation. Items below distinguish implemented work from planned work.
+**Current state: v0.2.0 (November 2026).** The GitHub release artifacts are useful for LAN file transfers, but security-sensitive and Android recovery functions still need real-device validation. Items below distinguish implemented work from planned work.
 
-## Implemented in preview releases
+## Implemented
 
 - [x] Shared Flutter/Dart client for Windows, Linux and Android.
 - [x] Peer discovery on private IPv4 local interfaces, direct IP fallback and VPN-aware Android network probing.
 - [x] First pairing with human-verifiable six-digit code, persistent trust identity and encrypted application payload.
+- [x] Full local and remote file management: create, rename, delete, copy, move within a device, cut/copy/paste, conflict handling, metadata, search and sorting (protocol v5).
 - [x] Two-panel file manager, navigation with `..`, independent multi-selection, Select all, per-panel copy directions and Windows volume selector.
 - [x] Continuous, bounded, SHA-256-verified streaming transfer of files and nested folders.
 - [x] Opt-in Android foreground LAN service for previously trusted peers, including persistent notification and separate headless engine (hardware acceptance pending).\n- [x] Interrupted LAN copy recovery with per-file prefix verification, completed-file skipping, persistent transfer journal, bounded reconnect and pause/resume/cancel controls (protocol v4, both ends 0.1.7).
@@ -36,7 +37,7 @@ Preview.2 includes operation ID matching, transfer-slot reservation for Android 
 ## Deferred product work
 
 - WAN relay/hub over HTTPS/WSS: separate architectural and possibly commercial decision. Client source remains GPL.
-- Directory synchronization, multi-peer sessions, drag-and-drop, delete/rename/move and comparisons.
+- Directory synchronization, multi-peer sessions, drag-and-drop and directory comparisons. Cross-device move awaits a verified source-deletion protocol.
 - File previews, metadata preservation, better Android scoped-storage/SAF integration.
 - Android foreground-service startup/reboot policy and managed backup jobs.
 - macOS/iOS clients.
