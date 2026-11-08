@@ -146,7 +146,9 @@ void main() {
             'senderStatus=${a.lastMessage}, receiverStatus=${server.lastMessage}, '
             'largeFinal=${await File('${bRoot.path}/Documents/large.bin').exists()}');
       }
-      expect(await File('${bRoot.path}/Documents/first.txt').exists(), isTrue);
+      // Directory.list has no guaranteed ordering: first.txt may not yet
+      // have been sent when large.bin reaches the disconnect threshold.
+      // Verify every file after recovery instead.
       // Diagnose whether interruption preserved a durable partial file,
       // rather than treating a completed retry as proof of actual resume.
       final stages = await Directory('${bRoot.path}/.ferrypane-resume')
