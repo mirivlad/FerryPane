@@ -697,8 +697,9 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
     for (var i = 0; i < sourcePaths.length; i++) {
       for (var j = 0; j < sourcePaths.length; j++) {
         if (i == j) continue;
-        if ((from.remote ? p.posix : p).isWithin(
-            sourcePaths[i], sourcePaths[j])) {
+        if (from.remote
+            ? p.posix.isWithin(sourcePaths[i], sourcePaths[j])
+            : p.isWithin(sourcePaths[i], sourcePaths[j])) {
           throw StateError('Nested selected sources cannot be moved together');
         }
       }
