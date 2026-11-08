@@ -1468,13 +1468,18 @@ class FerryService extends ChangeNotifier {
       _touchIncoming();
     } catch (e) {
       _status(tr('Ошибка файловой передачи: {error}', {'error': e}));
-      await incoming.abort();
-      _setIncoming(null);
-      _discardingTransfer = true;
-      if (_pendingJob != null && _pendingJob!['peer'] == peer.remoteKey) {
+      // A socket can close while an already-dispatched chunk is still
+      // being written. In that case the disconnect handler is preserving
+      // this partial transfer; do not race it with a destructive abort.
+      final interrupted = connected != peer || !peer.ready;
+      await incoming.abort(preserve: interrupted);
+      if (_incoming == incoming) _setIncoming(null);
+      _discardingTransfer = !interrupted;
+      if (!interrupted &&
+          _pendingJob != null && _pendingJob!['peer'] == peer.remoteKey) {
         await _finishJob();
       }
-      if (peer.ready) {
+      if (!interrupted && peer.ready) {
         await peer.sendJson({
           'type': 'error',
           'transferId': incoming.transferId,
