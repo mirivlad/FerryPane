@@ -186,8 +186,11 @@ void main() {
       );
       await b2.start();
       await a2.start();
-      expect(a2.hasPendingCopy, isTrue,
-          reason: 'Selection and destination must survive restart');
+      if (!a2.hasPendingCopy) {
+        throw StateError('Sender job missing after service reconstruction: '
+            'stored=${aId.prefs.getString('ferrypane.resume.pending')}, '
+            'senderStatus=${a2.lastMessage}');
+      }
       await a2.connect('ws://127.0.0.1:${b2.boundPort}');
       await waitUntil(() => !a2!.hasPendingCopy &&
           File('${bRoot.path}/Documents/large.bin').existsSync());
