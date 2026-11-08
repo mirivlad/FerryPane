@@ -43,6 +43,11 @@ jobs:
         with:
           name: FerryPane-linux-deb
           path: FerryPane-linux-amd64.deb
+      - name: Smoke-test Debian installation
+        run: |
+          sudo apt-get install -y ./FerryPane-linux-amd64.deb
+          test -x /opt/ferrypane/ferrypane
+          test -f /usr/share/applications/ferrypane.desktop
   windows:
     runs-on: windows-2022
     steps:
@@ -81,6 +86,15 @@ jobs:
         with:
           name: FerryPane-windows-installer
           path: FerryPane-windows-x64-setup.exe
+      - name: Smoke-test Windows installer
+        shell: pwsh
+        run: |
+          $setup = (Resolve-Path 'FerryPane-windows-x64-setup.exe').Path
+          $installed = Join-Path $env:LOCALAPPDATA 'Programs\FerryPane\ferrypane.exe'
+          $process = Start-Process -FilePath $setup -ArgumentList '/S' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "NSIS exit code: $($process.ExitCode)" }
+          if (!(Test-Path $installed)) { throw "NSIS setup failed to install ferrypane.exe" }
+          if (!(Test-Path (Join-Path $env:LOCALAPPDATA 'Programs\FerryPane\Uninstall.exe'))) { throw "NSIS uninstaller missing" }
   android:
     runs-on: ubuntu-24.04
     steps:

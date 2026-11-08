@@ -63,6 +63,8 @@ class AppLanguage {
     'Новых контактов: {count}': 'New contacts: {count}',
     'Совпадают по телефону или email: {count}':
         'Matching phone or email: {count}',
+    'FerryPane добавит недостающие контакты и телефоны/email к совпадающим. Существующие данные не удаляются. Фото и редкие поля vCard пока не импортируются.':
+        'FerryPane will add missing contacts and phone/email fields to matches. Existing data will not be deleted. Photos and uncommon vCard fields are not imported yet.',
     'FerryPane не удаляет существующие контакты. Создание записей изменит адресную книгу этого телефона.':
         'FerryPane never removes existing contacts. Adding entries changes this phone’s address book.',
     'Отмена': 'Cancel',

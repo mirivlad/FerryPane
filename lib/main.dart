@@ -249,7 +249,7 @@ class _FerryHomeState extends State<FerryHome> with WidgetsBindingObserver {
               Text(tr('Новых контактов: {count}', {'count': preview['new']})),
               Text(tr('Совпадают по телефону или email: {count}', {'count': preview['matched']})),
               const SizedBox(height: 12),
-              Text(preview['details']?.toString() ?? ''),
+              Text(tr('FerryPane добавит недостающие контакты и телефоны/email к совпадающим. Существующие данные не удаляются. Фото и редкие поля vCard пока не импортируются.')),
               const SizedBox(height: 8),
               Text(tr(
                 'FerryPane не удаляет существующие контакты. Создание записей изменит адресную книгу этого телефона.',
