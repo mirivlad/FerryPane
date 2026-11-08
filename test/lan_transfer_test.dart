@@ -44,6 +44,7 @@ void main() {
     IncomingTransfer? incoming;
     final flow = FlowAcknowledgements();
     Completer<void>? receipt;
+    Completer<ResumeReply>? resumeResponse;
     String? expectedReceipt;
     var disconnections = 0;
     var receiverCount = 0;
@@ -107,6 +108,11 @@ void main() {
             flow.accept(
               msg['transferId'] as String, (msg['chunks'] as num).toInt(),
             );
+          } else if (msg['type'] == 'file_resume') {
+            final pending = resumeResponse;
+            if (pending != null && !pending.isCompleted) {
+              pending.complete(ResumeReply.fromJson(msg));
+            }
           } else if (msg['type'] == 'transfer_complete' &&
               msg['transferId'] == expectedReceipt) {
             final waiter = receipt;
@@ -141,6 +147,28 @@ void main() {
           (_) {},
           (chunks) => flow.waitFor(transferId, chunks),
           transferId: transferId,
+          negotiate: (path, size, digest, {bool reset = false}) async {
+            final pending = Completer<ResumeReply>();
+            resumeResponse = pending;
+            await a.sendJson(reset ? {
+              'type': 'file_reset',
+              'transferId': transferId,
+              'path': path,
+            } : {
+              'type': 'file_begin',
+              'transferId': transferId,
+              'path': path,
+              'size': size,
+              'sha256': digest,
+            });
+            try {
+              return await pending.future.timeout(
+                const Duration(seconds: 20),
+              );
+            } finally {
+              if (resumeResponse == pending) resumeResponse = null;
+            }
+          },
         );
         await receipt.future.timeout(const Duration(seconds: 20));
         flow.finish();

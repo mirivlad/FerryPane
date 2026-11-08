@@ -37,7 +37,7 @@ class TransferProgress {
 
   const TransferProgress(this.file, this.done, this.total, this.bytesPerSecond);
 
-  double get fraction => total > 0 ? (done / total).clamp(0.0, 1.0) : 0;
+  double get fraction => total > 0 ? (done / total).clamp(0.0, 1.0).toDouble() : 0.0;
   Duration? get remaining => bytesPerSecond > 0 && done < total
       ? Duration(seconds: ((total - done) / bytesPerSecond).ceil())
       : null;

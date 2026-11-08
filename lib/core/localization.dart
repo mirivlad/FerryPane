@@ -107,7 +107,6 @@ class AppLanguage {
         'Waiting to reconnect and resume the transfer',
     'Передача запущена. Докачка включена.':
         'Transfer started; resuming is enabled.',
-    'Передача завершена': 'Transfer completed',
     'Отключиться': 'Disconnect',
     'Права устройства {name}': 'Permissions for {name}',
     'Для новых сопряжений доступ на запись отключён по умолчанию. Старые разрешения сохраняются.':
