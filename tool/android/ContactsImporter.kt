@@ -69,7 +69,9 @@ class ContactsImporter(private val context: Context) {
     private fun emailKey(value: String): String = value.trim().lowercase(Locale.ROOT)
 
     private fun cards(file: File): List<Candidate> {
-        val parsed: List<VCard> = Ezvcard.parse(file).all()
+        val parsed: List<VCard> = file.inputStream().use { stream ->
+            Ezvcard.parse(stream).all()
+        }
         if (parsed.isEmpty() || parsed.size > 20000) {
             throw IllegalArgumentException("Архив пуст или содержит больше 20 000 контактов")
         }
