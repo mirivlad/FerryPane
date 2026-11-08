@@ -117,12 +117,12 @@ jobs:
         run: |
           mkdir -p "$HOME/.gradle/init.d"
           printf '%s\n' \
-            'gradle.beforeProject { project ->' \
-            '  project.repositories.maven {' \
+            'gradle.beforeSettings { settings ->' \
+            '  settings.pluginManagement.repositories.maven {' \
             '    url "https://maven.aliyun.com/repository/central"' \
             '    content { includeGroupByRegex("org\\.jetbrains\\.kotlin.*") }' \
             '  }' \
-            '  project.buildscript.repositories.maven {' \
+            '  settings.dependencyResolutionManagement.repositories.maven {' \
             '    url "https://maven.aliyun.com/repository/central"' \
             '    content { includeGroupByRegex("org\\.jetbrains\\.kotlin.*") }' \
             '  }' \
