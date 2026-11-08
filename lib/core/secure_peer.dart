@@ -304,6 +304,9 @@ class SecurePeer {
 
   Future<Uint8List> _decrypt(Uint8List frame) async {
     if (frame.length < 28) throw const FormatException('Truncated AEAD frame');
+    if (frame.length > maxEncryptedCommandBytes + 29) {
+      throw const FormatException('Encrypted frame exceeds protocol limit');
+    }
     final nonce = frame.sublist(0, 12);
     final seq = ByteData.sublistView(nonce).getUint64(4, Endian.big);
     if (seq != _recvCounter++) throw const FormatException('Replay or reordered packet');
@@ -322,6 +325,16 @@ class SecurePeer {
       _enqueue(Uint8List.fromList([1, ...bytes]));
 
   Future<void> _enqueue(Uint8List clear) {
+    // Check before encryption rather than asking the recipient to reject a
+    // message that our own sender should never have emitted.
+    if (clear.isEmpty ||
+        clear.length > (clear.first == 1
+            ? maxEncryptedChunkBytes
+            : maxEncryptedCommandBytes)) {
+      return Future<void>.error(
+        const FormatException('Outgoing message exceeds protocol limit'),
+      );
+    }
     final previous = _sendTail;
     final completer = Completer<void>();
     _sendTail = completer.future;

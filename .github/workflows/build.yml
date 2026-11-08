@@ -157,6 +157,16 @@ jobs:
         with:
           pattern: FerryPane-*
           merge-multiple: true
+      - name: Create SHA256SUMS
+        run: |
+          sha256sum \
+            FerryPane-android.apk \
+            FerryPane-linux-amd64.deb \
+            FerryPane-linux-x64.tar.gz \
+            FerryPane-windows-x64-setup.exe \
+            FerryPane-windows-x64.zip > SHA256SUMS
+          test "$(wc -l < SHA256SUMS)" -eq 5
+          sha256sum --check SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           fail_on_unmatched_files: true
@@ -169,3 +179,4 @@ jobs:
             FerryPane-windows-x64.zip
             FerryPane-windows-x64-setup.exe
             FerryPane-android.apk
+            SHA256SUMS

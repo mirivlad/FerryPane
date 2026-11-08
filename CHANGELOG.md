@@ -2,6 +2,18 @@
 
 All versions are development previews until the project has passed the device and security acceptance criteria.
 
+## 0.1.6 Preview.2 — protocol stability hotfix
+
+- Correlate directory listings and transfer errors by request/transfer ID; stale responses cannot cancel or replace the next operation.
+- Close a real concurrency race in Android contacts/SMS backup preparation: reserve the transfer slot before asynchronous export.
+- Explicit sender/receiver encrypted-frame and chunk limits without changing existing 64 KiB streaming chunks.
+- Ignore unknown command types safely instead of aborting unrelated transfers; report correlated failures to the user.
+- Receiver transfer inactivity watchdog: abort and remove the current .part file after **five minutes without progress**, without limiting total copy duration.
+- Reject unsafe Windows device filenames only on Windows receivers; preserve normal Linux/Android filenames.
+- Refuse browser-origin WebSocket requests without changing native LAN clients; add regression tests.
+- Release binaries now include SHA256SUMS verified by CI. Checksums alone are **not signatures** and do not establish publisher authenticity.
+- Protocol remains v3, identity keys and existing pairings are unchanged. No added confirmation dialogs.
+
 ## 0.1.6 Preview
 
 - Migrated existing device identity seeds into OS-protected storage (Windows protected storage, Android Keystore, Linux Secret Service), with verified readback and fail-closed recovery of legacy identity/trust.
