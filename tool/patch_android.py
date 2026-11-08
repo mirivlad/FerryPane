@@ -3,6 +3,7 @@
 from pathlib import Path
 import re
 import shutil
+import os
 
 root = Path(__file__).resolve().parent.parent
 manifest = root / "android/app/src/main/AndroidManifest.xml"
@@ -301,6 +302,58 @@ shutil.copyfile(
     root / "tool/android/ContactsImporter.kt",
     root / "android/app/src/main/kotlin/top/mirv/ferrypane/ContactsImporter.kt",
 )
+# Use the official Gradle CDN's smaller binary archive, not the generated
+# GitHub-redirecting *all* archive (intermittent HTTP 504 on CI runners).
+wrapper = root / "android/gradle/wrapper/gradle-wrapper.properties"
+if not wrapper.exists():
+    raise RuntimeError("Flutter Gradle wrapper missing")
+wrapper_lines = wrapper.read_text(encoding="utf-8").splitlines()
+found_wrapper = False
+for index, line in enumerate(wrapper_lines):
+    if line.startswith("distributionUrl="):
+        match = re.search(r"gradle-([0-9.]+)-(?:all|bin)\.zip", line)
+        if not match:
+            raise RuntimeError("Unrecognized generated Gradle wrapper URL")
+        version = match.group(1)
+        if os.environ.get("GITHUB_ACTIONS") == "true" and version == "9.3.1":
+            # The upstream release download currently redirects to GitHub
+            # and returns 504 on Actions. Use an independent mirror only with
+            # the pinned, independently published upstream SHA-256.
+            wrapper_lines[index] = (
+                "distributionUrl=https\\://mirrors.aliyun.com/gradle/"
+                + "distributions/v9.3.1/gradle-9.3.1-bin.zip"
+            )
+            wrapper_lines.append(
+                "distributionSha256Sum="
+                + "b266d5ff6b90eada6dc3b20cb090e3731302e553a27c5d3e4df1f0d76beaff06"
+            )
+        else:
+            wrapper_lines[index] = (
+                "distributionUrl=https\\://downloads.gradle.org/distributions/"
+                + "gradle-" + version + "-bin.zip"
+            )
+        found_wrapper = True
+if not found_wrapper:
+    raise RuntimeError("Generated Gradle wrapper has no distributionUrl")
+wrapper.write_text("\n".join(wrapper_lines) + "\n", encoding="utf-8")
+
+
+# On GitHub Actions Kotlin compiler artifacts sometimes redirect from Maven
+# Central to GitHub Releases and return HTTP 504. Prefer a secondary mirror
+# for Android builds; keep standard Maven repositories as fallbacks.
+if os.environ.get("GITHUB_ACTIONS") == "true":
+    for rel in ["android/settings.gradle.kts", "android/build.gradle.kts"]:
+        gradle_repos = root / rel
+        if not gradle_repos.exists():
+            raise RuntimeError("Generated Gradle repositories missing: " + rel)
+        gradle_text = gradle_repos.read_text(encoding="utf-8")
+        mirror = 'maven { url = uri("https://maven.aliyun.com/repository/central") }'
+        if mirror not in gradle_text:
+            if "mavenCentral()" not in gradle_text:
+                raise RuntimeError("Generated Gradle Maven repositories changed: " + rel)
+            gradle_text = gradle_text.replace("mavenCentral()", mirror + "\n        mavenCentral()")
+            gradle_repos.write_text(gradle_text, encoding="utf-8")
+
 print("Patched Android LAN, native contacts/SMS backup, and vCard importer")
 
 # Flutter create generates release build signing with a random runner debug
