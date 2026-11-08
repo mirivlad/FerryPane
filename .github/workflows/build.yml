@@ -35,6 +35,7 @@ jobs:
         with:
           name: FerryPane-linux-x64
           path: FerryPane-linux-x64.tar.gz
+          if-no-files-found: error
       - name: Build Debian installer
         run: |
           bash tool/build_deb.sh "$(awk '/^version:/ {print $2}' pubspec.yaml | cut -d+ -f1)"
@@ -43,6 +44,7 @@ jobs:
         with:
           name: FerryPane-linux-deb
           path: FerryPane-linux-amd64.deb
+          if-no-files-found: error
       - name: Smoke-test Debian installation
         run: |
           sudo apt-get install -y ./FerryPane-linux-amd64.deb
@@ -68,6 +70,7 @@ jobs:
         with:
           name: FerryPane-windows-x64
           path: FerryPane-windows-x64.zip
+          if-no-files-found: error
       - name: Install NSIS
         shell: pwsh
         run: |
@@ -82,10 +85,13 @@ jobs:
           $version = ((Get-Content pubspec.yaml | Select-String '^version: (.+?)\+').Matches.Groups[1].Value)
           & $nsis "/DAPP_SOURCE=$source" "/DAPP_VERSION=$version" "tool/windows/FerryPane.nsi"
           if ($LASTEXITCODE -ne 0) { throw "NSIS installer failed" }
+          Copy-Item -LiteralPath 'tool/windows/FerryPane-windows-x64-setup.exe' -Destination 'FerryPane-windows-x64-setup.exe'
+          if (!(Test-Path 'FerryPane-windows-x64-setup.exe')) { throw "Installer artifact not found" }
       - uses: actions/upload-artifact@v4
         with:
           name: FerryPane-windows-installer
           path: FerryPane-windows-x64-setup.exe
+          if-no-files-found: error
       - name: Smoke-test Windows installer
         shell: pwsh
         run: |
@@ -141,6 +147,7 @@ jobs:
         with:
           name: FerryPane-android-apk
           path: FerryPane-android.apk
+          if-no-files-found: error
   release:
     if: startsWith(github.ref, 'refs/tags/')
     needs: [linux, windows, android]
@@ -152,6 +159,7 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
+          fail_on_unmatched_files: true
           name: FerryPane 0.1.5 Preview
           prerelease: true
           generate_release_notes: true
