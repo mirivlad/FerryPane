@@ -91,8 +91,9 @@ The CI also creates `.deb` with `tool/build_deb.sh` and a per-user NSIS Windows 
 - [Roadmap and deferred features](docs/ROADMAP.md)
 - [Android backups and restoration](docs/PHONE_BACKUP.md)
 - [Android signing and update compatibility](docs/SIGNING.md)
+- [Changelog](CHANGELOG.md)
 - [Issues](https://github.com/mirivlad/FerryPane/issues)
 
-FerryPane is licensed under the **GNU General Public License v3.0 or later**, see [LICENSE](LICENSE). A possible future WAN relay/hub is a separate undecided service, with no assumed license or business model.
+FerryPane is licensed under the **GNU General Public License v3.0**, see [LICENSE](LICENSE). A possible future WAN relay/hub is a separate undecided service, with no assumed license or business model.
 
 Bug reports with OS/build number, both app versions, network conditions (including VPN) and reproduction steps are welcome.

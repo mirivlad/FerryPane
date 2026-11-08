@@ -85,8 +85,8 @@ flutter test
 flutter build linux --release
 ```
 
-Для сборки Windows нужен Windows + Visual Studio C++ toolchain. Для Android — Android SDK/JDK 17 и постоянный ключ для публичных релизов. Подробности в [README](../README.md), [архитектуре](ARCHITECTURE.md), [плане](ROADMAP.md) и [подписи Android](SIGNING.md).
+Для сборки Windows нужен Windows + Visual Studio C++ toolchain. Для Android — Android SDK/JDK 17 и постоянный ключ для публичных релизов. Подробности в [README](../README.md), [архитектуре](ARCHITECTURE.md), [плане](ROADMAP.md), [истории версий](../CHANGELOG.md) и [подписи Android](SIGNING.md).
 
-**Лицензия клиента — GPL-3.0-or-later.** Будущий интернет-хаб — отдельный проект, решение о лицензии которого ещё не принято.
+**Лицензия клиента — GPL-3.0.** Будущий интернет-хаб — отдельный проект, решение о лицензии которого ещё не принято.
 
 Мы приветствуем сообщения об ошибках с указанием версии, ОС, используемого VPN и шагов воспроизведения.
