@@ -125,6 +125,7 @@ void main() {
     );
     FerryService? a2;
     FerryService? b2;
+    var originalsDisposed = false;
     try {
       await a.start();
       await server.start();
@@ -175,6 +176,7 @@ void main() {
       // persisted pending selection both survive service reconstruction.
       a.dispose();
       server.dispose();
+      originalsDisposed = true;
       await Future<void>.delayed(const Duration(milliseconds: 250));
       restarting = true;
       b2 = FerryService(
@@ -221,8 +223,10 @@ void main() {
           File('${bRoot.path}/Documents/large.bin').openRead()).first;
       expect(transferredHash, originalHash);
     } finally {
-      a.dispose();
-      server.dispose();
+      if (!originalsDisposed) {
+        a.dispose();
+        server.dispose();
+      }
       a2?.dispose();
       b2?.dispose();
       await Future<void>.delayed(const Duration(milliseconds: 250));
