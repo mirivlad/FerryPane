@@ -337,6 +337,23 @@ if not found_wrapper:
     raise RuntimeError("Generated Gradle wrapper has no distributionUrl")
 wrapper.write_text("\n".join(wrapper_lines) + "\n", encoding="utf-8")
 
+
+# On GitHub Actions Kotlin compiler artifacts sometimes redirect from Maven
+# Central to GitHub Releases and return HTTP 504. Prefer a secondary mirror
+# for Android builds; keep standard Maven repositories as fallbacks.
+if os.environ.get("GITHUB_ACTIONS") == "true":
+    for rel in ["android/settings.gradle.kts", "android/build.gradle.kts"]:
+        gradle_repos = root / rel
+        if not gradle_repos.exists():
+            raise RuntimeError("Generated Gradle repositories missing: " + rel)
+        gradle_text = gradle_repos.read_text(encoding="utf-8")
+        mirror = 'maven { url = uri("https://maven.aliyun.com/repository/central") }'
+        if mirror not in gradle_text:
+            if "mavenCentral()" not in gradle_text:
+                raise RuntimeError("Generated Gradle Maven repositories changed: " + rel)
+            gradle_text = gradle_text.replace("mavenCentral()", mirror + "\n        mavenCentral()")
+            gradle_repos.write_text(gradle_text, encoding="utf-8")
+
 print("Patched Android LAN, native contacts/SMS backup, and vCard importer")
 
 # Flutter create generates release build signing with a random runner debug
